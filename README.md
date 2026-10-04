@@ -36,7 +36,7 @@ mapped into `[theme.custom]` in your `config.toml` and reloaded automatically.
 ## Features
 
 - **`prefix+t`** → an fzf popup with a live truecolor swatch preview.
-- **19 popular themes bundled offline** (Dracula, Gruvbox, Nord, Tokyo Night,
+- **112 themes bundled offline** (Dracula, Gruvbox, Nord, Tokyo Night,
   Catppuccin, Solarized, One Dark, Everforest, Rosé Pine, Kanagawa, Ayu,
   GitHub, …).
 - **Live-fetch** any other theme from terminalcolors.com on selection
@@ -54,11 +54,11 @@ mapped into `[theme.custom]` in your `config.toml` and reloaded automatically.
 | | |
 |---|---|
 | Herdr | ≥ 0.8.0 |
-| OS | macOS, Linux |
-| Dependencies | `bash`, `curl`, [`fzf`](https://github.com/junegunn/fzf) |
+| OS | Windows, macOS, Linux |
+| Dependencies | [`fzf`](https://github.com/junegunn/fzf), `go` (build only) |
 
 `fzf` is usually already present if you use other Herdr plugins (file-picker,
-termscope). If not: `brew install fzf` (macOS) or your distro's package.
+termscope). If not: `winget install junegunn.fzf` (Windows), `brew install fzf` (macOS), or your Linux package manager.
 
 ---
 
@@ -101,14 +101,11 @@ Use this only when hacking on the plugin itself. A linked local checkout is
 **not** tracked for updates — pull changes with `git` yourself.
 
 ```bash
-git clone https://github.com/qintmb/herdr-theme-picker.git
+git clone https://github.com/wapenshaw/herdr-theme-picker.git
 cd herdr-theme-picker
-herdr plugin link "$PWD"        # or: bash bin/install.sh
+herdr plugin link "$PWD"
 herdr server reload-config
 ```
-
-`bin/install.sh` is a thin convenience wrapper around `herdr plugin link` +
-`reload-config` for a local checkout.
 
 ---
 
@@ -155,11 +152,13 @@ Two rows are pinned at the bottom of the list:
 
 **`+ Add new theme…`** — press **Tab** (from anywhere) or **Enter** on that row to:
 
-1. Open an editor with a ghostty-format template — **nvim** is used when installed, otherwise `$VISUAL`/`$EDITOR`, then `nano`/`vi`.
+1. Open an editor with a ghostty-format template — `$VISUAL`/`$EDITOR` is respected first (including arguments such as `code --wait`), then `nvim`, `nano`, and `notepad` on Windows or `vi` on Unix. Quote executable paths containing spaces.
 2. Paste a palette (e.g. terminalcolors.com → Download → **Ghostty**), save, and close.
 3. Type a name — it's slugified, validated, saved, appended to the list, and applied immediately.
 
-**`+ Add from clipboard…`** — Enter on this row skips the editor entirely: it reads a ghostty-format palette straight from your system clipboard (`pbpaste`/`wl-paste`/`xclip`/`xsel`), asks only for a name, then saves and applies. Copy a palette, open the picker, pick this row, type a name — done.
+**`+ Add from clipboard…`** — Enter on this row skips the editor entirely: it reads a ghostty-format palette straight from your system clipboard (`Get-Clipboard` on Windows; `pbpaste`/`wl-paste`/`xclip`/`xsel` on Unix), asks only for a name, then saves and applies. Copy a palette, open the picker, pick this row, type a name — done.
+
+Palettes must provide `background`, `foreground`, and all 16 `palette` entries as six-digit hex colors. Imported colors are normalized to `#rrggbb`. Theme names must be portable filenames; Windows device names such as `con` and `nul` are rejected. If a custom theme shares a bundled theme's name, the custom theme takes precedence until deleted.
 
 User-added themes are stored in `HERDR_PLUGIN_STATE_DIR/themes` (with their own
 `index.txt`), so plugin updates never overwrite them. They appear in the list
@@ -213,15 +212,15 @@ herdr plugin pane open --plugin herdr-theme-picker --entrypoint picker --placeme
 ## How it works
 
 ```
-prefix+t → picker.sh (fzf)
+prefix+t → herdr-theme-picker picker (fzf)
              │  pick a slug
              ▼
-          apply.sh <slug>
+          herdr-theme-picker apply <slug>
              │  1. resolve_palette      → themes/<slug>  or  fetch terminalcolors.com (cached)
-             │  2. palette_to_tokens    → 16 [theme.custom] tokens
+             │  2. palette_to_tokens    → 19 [theme.custom] tokens
              │  3. write config.toml   (backup: config.toml.bak-YYYYMMDD)
-             │  4. sync_terminal_colors → OSC 4/10/11 to outer PTY (live ANSI update)
-             │                         → copy palette to ~/.config/ghostty/herdr-theme (if present)
+             │  4. sync_terminal_colors → OSC 4/10/11 to outer host terminal (Windows Terminal, Ghostty, WezTerm, iTerm2, etc.)
+             │                         → copy palette to Ghostty herdr-theme (if configured)
              │  5. herdr server reload-config
              ▼
           Herdr UI + terminal emulator update simultaneously
@@ -245,19 +244,29 @@ Palettes are read in **ghostty format** (`background`, `foreground`,
 
 ## Terminal emulator sync
 
-When you pick a theme, `apply.sh` automatically emits **OSC 4** (palette),
+When you pick a theme, `herdr-theme-picker` emits **OSC 4** (palette),
 **OSC 10** (foreground), and **OSC 11** (background) sequences to the
-terminal emulator that is hosting Herdr. This updates the live session's
-ANSI colors instantly — no restart required.
+current pane and, when its owning client can be identified, the host terminal
+emulator (Windows Terminal on Windows, or the outer PTY slave on macOS/Linux).
+This updates the addressed session's ANSI colors instantly
+— no restart required.
 
 Because Herdr is a terminal multiplexer, its internal panes intercept
 `/dev/tty` writes before they reach the outer emulator. The plugin works
-around this by locating the PTY slave that the Herdr client renders into
-and writing there directly.
+around this by locating an interactive Herdr ancestor and writing to that client's
+terminal. On Windows, console attachment runs in a separate helper process so
+the picker's console and reload command remain intact.
 
-Any terminal emulator that supports OSC 4/10/11 benefits automatically —
-Ghostty, iTerm2, WezTerm, Alacritty, and others. **No configuration is
-needed** for the live sync to work.
+Any terminal emulator that supports OSC 4/10/11 can receive live updates —
+Ghostty, iTerm2, WezTerm, Alacritty, and others.
+
+Plugins launched by a headless Herdr server may have no interactive client in
+their process ancestry. For these launches, set `HERDR_THEME_CLIENT_PID` to the
+intended local Herdr client's PID in the environment that launches the picker.
+The plugin verifies that PID belongs to Herdr and writes only to that client.
+If no owning client can be identified, host sync is skipped with a message;
+Herdr's UI theme and optional Ghostty persistence still update. The plugin never
+selects an unrelated Herdr process by name or recolors every open session.
 
 ### Ghostty: persist colors for new windows
 
@@ -295,17 +304,29 @@ id = "herdr-theme-picker"
 name = "Theme Picker"
 version = "0.1.0"
 min_herdr_version = "0.8.0"
+platforms = ["linux", "macos", "windows"]
+
+[[build]]
 platforms = ["linux", "macos"]
+command = ["go", "build", "-o", "herdr-theme-picker", "./cmd/herdr-theme-picker"]
+
+[[build]]
+platforms = ["windows"]
+command = ["go", "build", "-o", "herdr-theme-picker.exe", "./cmd/herdr-theme-picker"]
 
 [[panes]]
 id = "picker"
+title = "Theme Picker"
 placement = "popup"
-command = ["bash", "-c", "exec bash \"$HERDR_PLUGIN_ROOT/bin/picker.sh\""]
+width = "80%"
+height = "70%"
+command = ["./herdr-theme-picker", "picker"]
 
 [[actions]]
 id = "open"
+title = "Theme picker: open"
 contexts = ["workspace"]
-command = ["bash", "-c", "exec \"${HERDR_BIN_PATH:-herdr}\" plugin pane open --plugin herdr-theme-picker --entrypoint picker --placement popup --focus"]
+command = ["./herdr-theme-picker", "open"]
 
 [[keys.command]]
 key = "prefix+t"
@@ -353,14 +374,14 @@ Slugs may only contain `[a-z0-9-]` (validated to prevent path/URL injection).
 
 ### Change the color mapping
 
-Edit `bin/map.sh` → `palette_to_tokens`. Each `printf` line maps one Herdr
-token to a palette source. `bin/lib.sh` provides `darken_hex <#hex> <percent>`
+Edit `internal/theme/map.go` → `PaletteToTokens`. Each entry maps one Herdr
+token to a palette source. `lib.go` provides `DarkenHex(hex, percent)`
 for derived shades.
 
 ### Change the keybind
 
 Edit `key = "prefix+t"` in your `config.toml` to another combination
-(e.g. `prefix+shift+t`), then `herdr server reload-config`. The manifest's
+(e.g. `prefix+shift+t` or direct `alt+t`), then `herdr server reload-config`. The manifest's
 `[[keys.command]]` block is kept as a declaration of intent, but Herdr 0.8.2
 ignores it.
 
@@ -369,11 +390,15 @@ ignores it.
 ## Test
 
 ```bash
-bash tests/run.sh
+go test -v ./...
 ```
 
-Runs assert-based self-checks (no framework): palette mapping, `darken_hex`,
-slug validation, idempotent `[theme.custom]` writing, and swatch rendering.
+Runs unit and regression tests for palette validation/mapping, downloads and
+cache recovery, filename guards and deletion confirmation, TOML preservation
+and backups, editor discard, preview quoting, subprocess errors, and client
+selection. For additional checks, run `go vet ./...` and cross-build for the
+supported operating systems. The tests use temporary files and a local HTTP
+server; they do not reload a real Herdr session or modify your clipboard.
 
 ---
 
@@ -381,7 +406,7 @@ slug validation, idempotent `[theme.custom]` writing, and swatch rendering.
 
 ```bash
 herdr plugin uninstall herdr-theme-picker     # installed from GitHub
-herdr plugin unlink    herdr-theme-picker     # linked local checkout (or: bash bin/uninstall.sh)
+herdr plugin unlink    herdr-theme-picker     # linked local checkout
 herdr server reload-config
 ```
 

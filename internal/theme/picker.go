@@ -1,0 +1,297 @@
+package theme
+
+import (
+	"bufio"
+	"errors"
+	"fmt"
+	"io"
+	"os"
+	"path/filepath"
+	"strings"
+)
+
+const (
+	addRow     = "+ Add new theme…"
+	addClipRow = "+ Add from clipboard…"
+	template   = `# Paste a ghostty-format theme below, then save and close this editor.
+# Required: background, foreground, and palette 0..15 as #rrggbb colors.
+# Get one from https://terminalcolors.com → Download → Ghostty.
+#
+# background = #1e1e2e
+# foreground = #cdd6f4
+# cursor-color = #f5e0dc
+# palette = 0=#45475a
+# palette = 1=#f38ba8
+# ... through ...
+# palette = 15=#a6adc8
+`
+)
+
+// RunPicker uses a loop so repeated deletion/editing never grows the call stack.
+func RunPicker() error {
+	for {
+		input, err := pickerItems()
+		if err != nil {
+			return err
+		}
+		key, selection, cancelled, err := runFZF(input, "Search themes: ",
+			"↵ apply · tab/+ Add: new · ctrl-e edit ★ · ctrl-d delete ★ · esc cancel",
+			"tab,ctrl-e,ctrl-d", "preview")
+		if err != nil || cancelled {
+			return err
+		}
+		if key == "tab" || (key == "" && (selection == addRow || selection == addClipRow)) {
+			var slug string
+			if key != "tab" && selection == addClipRow {
+				slug, err = AddThemeClipboard()
+			} else {
+				slug, err = AddThemeEditor()
+			}
+			if err != nil {
+				return err
+			}
+			if slug == "" {
+				return nil
+			}
+			return ApplyTheme(slug)
+		}
+		slug := strings.TrimSpace(strings.TrimPrefix(strings.TrimPrefix(selection, "✓ "), "★ "))
+		if key == "ctrl-e" || key == "ctrl-d" {
+			if !IsUserTheme(slug) {
+				fmt.Fprintf(os.Stderr, "Only ★ user-added themes can be edited or deleted: %q.\n", slug)
+				continue
+			}
+			if key == "ctrl-e" {
+				return EditTheme(slug)
+			}
+			if err := DeleteTheme(slug); err != nil {
+				return err
+			}
+			continue
+		}
+		if slug == "" {
+			return nil
+		}
+		return ApplyTheme(slug)
+	}
+}
+
+func pickerItems() (string, error) {
+	users, err := readIndex(UserIndexFile(), true)
+	if err != nil {
+		return "", err
+	}
+	bundled, err := readIndex(filepath.Join(PluginRoot(), "themes", "index.txt"), false)
+	if err != nil {
+		return "", err
+	}
+	applied := ""
+	if data, err := os.ReadFile(AppliedFile()); err == nil {
+		applied = strings.TrimSpace(string(data))
+		if !IsValidSlug(applied) {
+			return "", fmt.Errorf("invalid applied theme marker")
+		}
+	} else if !errors.Is(err, os.ErrNotExist) {
+		return "", err
+	}
+	var rows []string
+	seen := make(map[string]bool)
+	if applied != "" {
+		rows = append(rows, "✓ "+applied)
+		seen[applied] = true
+	}
+	for _, slug := range users {
+		if _, err := userThemePath(slug); err != nil {
+			return "", err
+		}
+		if !seen[slug] {
+			rows = append(rows, "★ "+slug)
+			seen[slug] = true
+		}
+	}
+	for _, slug := range bundled {
+		if !seen[slug] {
+			rows = append(rows, "  "+slug)
+			seen[slug] = true
+		}
+	}
+	rows = append(rows, addRow, addClipRow)
+	return strings.Join(rows, "\n"), nil
+}
+
+func readAnswer(reader *bufio.Reader, prompt string) (string, error) {
+	fmt.Fprint(os.Stderr, prompt)
+	answer, err := reader.ReadString('\n')
+	if err != nil && !(errors.Is(err, io.EOF) && answer != "") {
+		return "", err
+	}
+	return strings.TrimSpace(answer), nil
+}
+
+func finalizeTheme(body string) (string, error) {
+	if _, err := ParsePaletteContent(body); err != nil {
+		return "", fmt.Errorf("invalid palette: %w", err)
+	}
+	reader := bufio.NewReader(os.Stdin)
+	name, err := readAnswer(reader, "Theme name: ")
+	if err != nil {
+		return "", err
+	}
+	slug := Slugify(name)
+	if !IsValidSlug(slug) {
+		return "", fmt.Errorf("invalid or reserved theme name: %q", name)
+	}
+	dest := filepath.Join(UserThemesDir(), slug)
+	if info, err := os.Lstat(dest); err == nil {
+		if !info.Mode().IsRegular() {
+			return "", fmt.Errorf("theme is not a regular file: %s", slug)
+		}
+		yn, err := readAnswer(reader, fmt.Sprintf("%q already exists. Overwrite? [y/N] ", slug))
+		if err != nil {
+			return "", err
+		}
+		if !strings.EqualFold(yn, "y") && !strings.EqualFold(yn, "yes") {
+			return "", nil
+		}
+	} else if !errors.Is(err, os.ErrNotExist) {
+		return "", err
+	}
+	if err := saveUserTheme(slug, body); err != nil {
+		return "", err
+	}
+	fmt.Fprintf(os.Stderr, "Saved theme %q.\n", slug)
+	return slug, nil
+}
+
+func saveUserTheme(slug, body string) error {
+	if !IsValidSlug(slug) {
+		return fmt.Errorf("invalid slug: %q", slug)
+	}
+	if _, err := ParsePaletteContent(body); err != nil {
+		return err
+	}
+	current, err := readIndex(UserIndexFile(), true)
+	if err != nil {
+		return err
+	}
+	if err := os.MkdirAll(UserThemesDir(), 0o755); err != nil {
+		return err
+	}
+	dest := filepath.Join(UserThemesDir(), slug)
+	if info, err := os.Lstat(dest); err == nil {
+		if !info.Mode().IsRegular() {
+			return fmt.Errorf("theme is not a regular file: %s", slug)
+		}
+	} else if !errors.Is(err, os.ErrNotExist) {
+		return err
+	}
+	if err := atomicWriteFile(dest, []byte(body), 0o644); err != nil {
+		return err
+	}
+	found := false
+	for _, item := range current {
+		if item == slug {
+			found = true
+		}
+	}
+	if !found {
+		current = append(current, slug)
+	}
+	if err := atomicWriteFile(UserIndexFile(), []byte(strings.Join(current, "\n")+"\n"), 0o644); err != nil {
+		return fmt.Errorf("theme saved at %s, but index update failed: %w", dest, err)
+	}
+	return nil
+}
+
+func AddThemeClipboard() (string, error) {
+	clip, err := ReadClipboard()
+	if err != nil {
+		return "", err
+	}
+	if strings.TrimSpace(clip) == "" {
+		return "", fmt.Errorf("clipboard is empty")
+	}
+	return finalizeTheme(clip)
+}
+
+func AddThemeEditor() (string, error) {
+	f, err := os.CreateTemp("", "herdr-theme-*.txt")
+	if err != nil {
+		return "", err
+	}
+	defer os.Remove(f.Name())
+	if _, err := f.WriteString(template); err != nil {
+		f.Close()
+		return "", err
+	}
+	if err := f.Close(); err != nil {
+		return "", err
+	}
+	cmd, err := editorCommand(f.Name())
+	if err != nil {
+		return "", err
+	}
+	cmd.Stdin, cmd.Stdout, cmd.Stderr = os.Stdin, os.Stdout, os.Stderr
+	if err := cmd.Run(); err != nil {
+		return "", fmt.Errorf("editor failed: %w", err)
+	}
+	pal, err := ParsePaletteFile(f.Name())
+	if err != nil {
+		return "", err
+	}
+	if err := validatePalette(pal); err != nil {
+		return "", err
+	}
+	data, err := os.ReadFile(f.Name())
+	if err != nil {
+		return "", err
+	}
+	return finalizeTheme(string(data))
+}
+
+// DeleteTheme confirms on stdin; guards apply equally to the picker and CLI.
+func DeleteTheme(slug string) error { return deleteTheme(slug, os.Stdin) }
+
+func deleteTheme(slug string, input io.Reader) error {
+	dest, err := userThemePath(slug)
+	if err != nil {
+		return err
+	}
+	answer, err := readAnswer(bufio.NewReader(input), fmt.Sprintf("Delete %q? [y/N] ", slug))
+	if errors.Is(err, io.EOF) {
+		return nil
+	}
+	if err != nil {
+		return err
+	}
+	if !strings.EqualFold(answer, "y") && !strings.EqualFold(answer, "yes") {
+		return nil
+	}
+	current, err := readIndex(UserIndexFile(), false)
+	if err != nil {
+		return err
+	}
+	marker, err := os.ReadFile(AppliedFile())
+	if err != nil && !errors.Is(err, os.ErrNotExist) {
+		return err
+	}
+	if err := os.Remove(dest); err != nil {
+		return fmt.Errorf("delete theme: %w", err)
+	}
+	var kept []string
+	for _, item := range current {
+		if item != slug {
+			kept = append(kept, item)
+		}
+	}
+	indexErr := atomicWriteFile(UserIndexFile(), []byte(strings.Join(kept, "\n")+"\n"), 0o644)
+	var markerErr error
+	if strings.TrimSpace(string(marker)) == slug {
+		markerErr = os.Remove(AppliedFile())
+	}
+	if err := errors.Join(indexErr, markerErr); err != nil {
+		return fmt.Errorf("theme deleted, but state cleanup failed: %w", err)
+	}
+	fmt.Fprintf(os.Stderr, "Deleted theme %q.\n", slug)
+	return nil
+}
