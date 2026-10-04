@@ -35,6 +35,18 @@ title = "Theme picker: open"
 contexts = ["workspace"]
 command = ["./herdr-theme-picker", "open"]
 
+[[actions]]
+id = "sync"
+title = "Theme picker: sync"
+contexts = ["global"]
+command = ["./herdr-theme-picker", "sync"]
+
+[[actions]]
+id = "restart"
+title = "Theme picker: restart daemon"
+contexts = ["global"]
+command = ["./herdr-theme-picker", "startup"]
+
 [[keys.command]]
 key = "prefix+t"
 type = "plugin_action"

@@ -108,30 +108,6 @@ func findActiveClientTTYs() ([]string, error) {
 	return ttys, nil
 }
 
-func findHerdrServerPID() int {
-	parentPID := os.Getppid()
-	out, err := exec.Command("ps", "-eo", "pid,ppid,tty,comm").Output()
-	if err != nil {
-		return parentPID
-	}
-	for _, line := range strings.Split(string(out), "\n") {
-		fields := strings.Fields(line)
-		if len(fields) < 4 {
-			continue
-		}
-		pid, err := strconv.Atoi(fields[0])
-		if err != nil {
-			continue
-		}
-		tty := fields[2]
-		name := strings.Join(fields[3:], " ")
-		if isHerdrProcess(name) && (tty == "?" || tty == "??" || tty == "-") {
-			return pid
-		}
-	}
-	return parentPID
-}
-
 func syncActiveClients(payload string, syncedTargets map[string]bool) {
 	ttys, err := findActiveClientTTYs()
 	if err != nil {
@@ -143,12 +119,16 @@ func syncActiveClients(payload string, syncedTargets map[string]bool) {
 		if !syncedTargets[tty] {
 			if err := emitToTTY(tty, payload); err == nil {
 				syncedTargets[tty] = true
+				daemonLog("synced client TTY %s", tty)
+			} else {
+				daemonLog("failed to sync client TTY %s: %v", tty, err)
 			}
 		}
 	}
 	for key := range syncedTargets {
 		if !activeSet[key] {
 			delete(syncedTargets, key)
+			daemonLog("pruned disconnected client TTY %s", key)
 		}
 	}
 }

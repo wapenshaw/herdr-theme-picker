@@ -117,6 +117,18 @@ func TestDaemonLifecycleAndPIDFile(t *testing.T) {
 func TestIsProcessAliveReal(t *testing.T) {
 	t.Logf("self alive %d: %v", os.Getpid(), isProcessAlive(os.Getpid()))
 	t.Logf("ppid alive %d: %v", os.Getppid(), isProcessAlive(os.Getppid()))
-	serverPID := findHerdrServerPID()
+	serverPID := HerdrServerPID()
 	t.Logf("herdr server PID %d alive: %v", serverPID, isProcessAlive(serverPID))
+}
+
+func TestHerdrSocketPID(t *testing.T) {
+	tmpDir := t.TempDir()
+	sockPath := tmpDir + "/test.sock"
+	if err := os.WriteFile(sockPath, []byte("12345:9876543210\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("HERDR_SOCKET_PATH", sockPath)
+	if pid := HerdrServerPID(); pid != 12345 {
+		t.Errorf("expected server PID 12345, got %d", pid)
+	}
 }

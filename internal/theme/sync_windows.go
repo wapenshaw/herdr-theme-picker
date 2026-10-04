@@ -104,34 +104,18 @@ func isProcessAlive(pid int) bool {
 }
 
 func findActiveClientPIDs() ([]int, error) {
+	serverPID := HerdrServerPID()
 	processes, err := windowsProcesses()
 	if err != nil {
 		return nil, err
 	}
 	var clients []int
 	for _, p := range processes {
-		if isHerdrProcess(p.name) && canAttachConsole(p.pid) {
+		if isHerdrProcess(p.name) && p.pid != serverPID {
 			clients = append(clients, p.pid)
 		}
 	}
 	return clients, nil
-}
-
-func findHerdrServerPID() int {
-	parentPID := os.Getppid()
-	processes, err := windowsProcesses()
-	if err != nil {
-		return parentPID
-	}
-	if p, ok := processes[parentPID]; ok && isHerdrProcess(p.name) {
-		return parentPID
-	}
-	for _, p := range processes {
-		if isHerdrProcess(p.name) && !canAttachConsole(p.pid) {
-			return p.pid
-		}
-	}
-	return parentPID
 }
 
 func syncActiveClients(payload string, syncedTargets map[string]bool) {
@@ -146,12 +130,16 @@ func syncActiveClients(payload string, syncedTargets map[string]bool) {
 		if !syncedTargets[key] {
 			if err := emitToClientPID(pid, payload); err == nil {
 				syncedTargets[key] = true
+				daemonLog("synced client PID %d", pid)
+			} else {
+				daemonLog("failed to sync client PID %d: %v", pid, err)
 			}
 		}
 	}
 	for key := range syncedTargets {
 		if !activeSet[key] {
 			delete(syncedTargets, key)
+			daemonLog("pruned disconnected client PID %s", key)
 		}
 	}
 }

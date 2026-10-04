@@ -10,6 +10,18 @@ import (
 	"time"
 )
 
+func daemonLog(format string, args ...any) {
+	logPath := filepath.Join(StateDir(), "sync.log")
+	f, err := os.OpenFile(logPath, os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0o644)
+	if err != nil {
+		return
+	}
+	defer f.Close()
+	timestamp := time.Now().Format("2006-01-02T15:04:05.000")
+	msg := fmt.Sprintf(format, args...)
+	fmt.Fprintf(f, "%s %s\n", timestamp, msg)
+}
+
 // DaemonPIDFile returns the path to the daemon PID lockfile.
 func DaemonPIDFile() string {
 	return filepath.Join(StateDir(), "sync.pid")
@@ -46,7 +58,9 @@ func RunDaemon(ctx context.Context) error {
 	}
 	defer os.Remove(pidPath)
 
-	monitoredPID := findHerdrServerPID()
+	monitoredPID := HerdrServerPID()
+	daemonLog("started sync daemon pid=%d, monitoring server pid=%d", os.Getpid(), monitoredPID)
+
 	ticker := time.NewTicker(500 * time.Millisecond)
 	defer ticker.Stop()
 
@@ -57,10 +71,12 @@ func RunDaemon(ctx context.Context) error {
 	for {
 		select {
 		case <-ctx.Done():
+			daemonLog("daemon received stop signal, exiting")
 			return nil
 		case <-ticker.C:
 			// If started by or bound to Herdr server, exit when the server exits.
 			if monitoredPID > 1 && !isProcessAlive(monitoredPID) {
+				daemonLog("monitored server pid %d exited, daemon stopping", monitoredPID)
 				return nil
 			}
 
@@ -87,6 +103,7 @@ func RunDaemon(ctx context.Context) error {
 				currentSlug = slug
 				currentPayload = PaletteOSCPayload(pal)
 				syncedTargets = make(map[string]bool)
+				daemonLog("active theme changed to %q", slug)
 			}
 
 			if currentPayload != "" {

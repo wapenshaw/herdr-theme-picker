@@ -122,6 +122,43 @@ func ConfigPath() string {
 	return "config.toml"
 }
 
+// HerdrSocketPath returns the path to Herdr's socket file.
+func HerdrSocketPath() string {
+	if custom := os.Getenv("HERDR_SOCKET_PATH"); custom != "" {
+		return custom
+	}
+	if runtime.GOOS == "windows" {
+		if appData := os.Getenv("APPDATA"); appData != "" {
+			return filepath.Join(appData, "herdr", "herdr.sock")
+		}
+	} else {
+		if runtimeDir := os.Getenv("XDG_RUNTIME_DIR"); runtimeDir != "" {
+			return filepath.Join(runtimeDir, "herdr", "herdr.sock")
+		}
+		if home, err := os.UserHomeDir(); err == nil {
+			return filepath.Join(home, ".config", "herdr", "herdr.sock")
+		}
+	}
+	return ""
+}
+
+// HerdrServerPID reads the PID of the running Herdr server from herdr.sock.
+func HerdrServerPID() int {
+	sockPath := HerdrSocketPath()
+	if sockPath != "" {
+		data, err := os.ReadFile(sockPath)
+		if err == nil {
+			parts := strings.Split(strings.TrimSpace(string(data)), ":")
+			if len(parts) > 0 {
+				if pid, err := strconv.Atoi(parts[0]); err == nil && pid > 0 {
+					return pid
+				}
+			}
+		}
+	}
+	return os.Getppid()
+}
+
 // PluginRoot returns the directory containing plugin assets (themes, herdr-plugin.toml).
 func PluginRoot() string {
 	if root := os.Getenv("HERDR_PLUGIN_ROOT"); root != "" {
