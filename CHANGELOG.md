@@ -4,6 +4,26 @@ All notable changes to this project are documented here. Format follows
 [Keep a Changelog](https://keepachangelog.com); versions follow semver and
 match the `version` field in `herdr-plugin.toml`.
 
+## [0.10.0] — Unreleased
+
+- **No background daemon.** Removed the 0.9 startup hook and sync loop that
+  recolored every Herdr terminal on the server machine, including clients with
+  their own colors. Terminal colors now change only on apply or explicit
+  `sync`, like the Bash version. The old `startup` command is a no-op.
+- **Client-machine model.** Applying writes the config of the machine running
+  the picker and recolors only Herdr clients on that machine (including
+  `herdr --remote` clients started there; never the remote bridge). When only
+  `--remote` clients are attached, `prefix+t` shows instructions to run the
+  picker on the client's own machine. A failed reload is a warning that points
+  to `prefix+shift+r`.
+- **Config fixes.** `[theme.custom.light]` / `[theme.custom.dark]` are kept;
+  repeated applies no longer add blank lines; a missing config is created;
+  lookup order matches Herdr (`HERDR_CONFIG_PATH`, `XDG_CONFIG_HOME`, platform).
+- **Compatibility.** Recognize `herdr session attach <name>` clients; reuse
+  Bash-era download caches offline; keep old Unix theme names and preserve
+  unsupported index entries; skip broken user themes instead of failing.
+- Tests run in an isolated temporary home/config/state with a fake `herdr`.
+
 ## [0.8.1] — 2026-09-01
 
 - **Precise pane borders.** The preview's box-drawing rules no longer get

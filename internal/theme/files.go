@@ -6,6 +6,8 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+
+	"herdr-theme-picker/internal/instance"
 )
 
 // atomicWriteFile keeps readers from observing truncated configs, indexes or palettes.
@@ -77,7 +79,7 @@ func readIndex(path string, optional bool) ([]string, error) {
 }
 
 func userThemePath(slug string) (string, error) {
-	if !IsValidSlug(slug) {
+	if !isStoredUserSlug(slug) {
 		return "", fmt.Errorf("invalid slug: %q", slug)
 	}
 	path := filepath.Join(UserThemesDir(), slug)
@@ -89,7 +91,7 @@ func userThemePath(slug string) (string, error) {
 	if !info.Mode().IsRegular() {
 		return "", fmt.Errorf("user theme is not a regular file: %s", slug)
 	}
-	slugs, err := readIndex(UserIndexFile(), false)
+	slugs, err := readUserIndex()
 	if err != nil {
 		return "", err
 	}
@@ -99,4 +101,62 @@ func userThemePath(slug string) (string, error) {
 		}
 	}
 	return "", fmt.Errorf("%q is not a user-added theme", slug)
+}
+
+// Invalid legacy entries must not disable the whole picker. Keep their bytes
+// on disk for recovery on the original OS, but never resolve them as paths.
+func readUserIndex() ([]string, error) {
+	data, err := os.ReadFile(UserIndexFile())
+	if errors.Is(err, os.ErrNotExist) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	var slugs []string
+	seen := make(map[string]bool)
+	for _, line := range strings.Split(string(data), "\n") {
+		slug := strings.TrimSpace(line)
+		if slug == "" || seen[slug] {
+			continue
+		}
+		seen[slug] = true
+		if !isStoredUserSlug(slug) {
+			fmt.Fprintf(os.Stderr, "Skipping unsupported theme name %q in %s; its file and index entry are preserved. Rename it on the original system to import it here.\n", slug, UserIndexFile())
+			continue
+		}
+		slugs = append(slugs, slug)
+	}
+	return slugs, nil
+}
+
+// Preserve unrecognized entries rather than silently deleting legacy data when
+// another theme is saved or removed.
+func updateUserIndex(slug string, remove bool) error {
+	lock, err := instance.Acquire(UserIndexFile() + ".lock")
+	if err != nil {
+		return fmt.Errorf("lock theme index: %w", err)
+	}
+	defer lock.Close()
+	data, err := os.ReadFile(UserIndexFile())
+	if err != nil && !errors.Is(err, os.ErrNotExist) {
+		return err
+	}
+	var lines []string
+	found := false
+	for _, line := range strings.Split(strings.TrimRight(string(data), "\r\n"), "\n") {
+		if strings.TrimSpace(line) == slug {
+			found = true
+			if remove {
+				continue
+			}
+		}
+		if line != "" {
+			lines = append(lines, line)
+		}
+	}
+	if !remove && !found {
+		lines = append(lines, slug)
+	}
+	return atomicWriteFile(UserIndexFile(), []byte(strings.Join(lines, "\n")+"\n"), 0o644)
 }

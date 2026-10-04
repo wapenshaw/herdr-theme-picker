@@ -4,6 +4,7 @@ package terminal
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"os/exec"
@@ -40,25 +41,16 @@ func Processes() (map[int]Client, error) {
 			tty = ""
 		}
 		p := Client{PID: pid, Parent: parent, TTY: tty, Name: strings.Join(fields[3:], " ")}
-		if IsHerdr(p.Name) && tty != "" {
-			args, err := processArgs(pid)
-			p.Interactive = err == nil && IsInteractiveCommand(args)
+		// Remote bridges have no TTY, but their arguments are still needed to
+		// tell whether every attached client lives on another machine.
+		if IsHerdr(p.Name) {
+			if args, err := processArgs(pid); err == nil {
+				classify(&p, args)
+			}
 		}
 		processes[pid] = p
 	}
 	return processes, nil
-}
-
-func Emit(payload string) error {
-	processes, err := Processes()
-	if err != nil {
-		return err
-	}
-	client, err := SelectClient(processes, os.Getppid(), os.Getenv("HERDR_THEME_CLIENT_PID"))
-	if err != nil {
-		return err
-	}
-	return EmitClient(client, payload)
 }
 
 func EmitClient(client Client, payload string) error {
@@ -87,6 +79,10 @@ func EmitClient(client Client, payload string) error {
 		return fmt.Errorf("client terminal is not a character device")
 	}
 	f, err := os.OpenFile(path, os.O_WRONLY|syscall.O_NONBLOCK, 0)
+	if errors.Is(err, os.ErrPermission) {
+		// Another account's client: not ours to recolor.
+		return ErrUnavailable
+	}
 	if err != nil {
 		return err
 	}
@@ -106,4 +102,4 @@ func IsProcessAlive(pid int) bool {
 	return process.Signal(syscall.Signal(0)) == nil
 }
 
-func RunHelper(string, bool) error { return fmt.Errorf("console helper is Windows-only") }
+func RunHelper(string) error { return fmt.Errorf("console helper is Windows-only") }

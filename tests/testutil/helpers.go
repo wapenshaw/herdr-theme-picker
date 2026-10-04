@@ -34,7 +34,7 @@ type FZFStep struct {
 // avoids assuming a POSIX shell or using platform-specific executable scripts.
 func Main(m *testing.M) {
 	if len(os.Args) > 2 && os.Args[1] == "terminal-sync" {
-		if err := terminal.RunHelper(os.Args[2], len(os.Args) > 3 && os.Args[3] == "--ancestor"); err != nil {
+		if err := terminal.RunHelper(os.Args[2]); err != nil {
 			if errors.Is(err, terminal.ErrUnavailable) {
 				os.Exit(3)
 			}
@@ -81,7 +81,36 @@ func Main(m *testing.M) {
 			os.Exit(2)
 		}
 	}
-	os.Exit(m.Run())
+	cleanup := isolate()
+	code := m.Run()
+	cleanup()
+	os.Exit(code)
+}
+
+// isolate points every config, state, and home lookup at a temporary tree and
+// replaces herdr with a missing binary. A test that forgets to set a path can
+// then never edit the user's config, reload a live session, update their
+// Ghostty fragment, or recolor a real terminal (the client PID is invalid).
+func isolate() func() {
+	root, err := os.MkdirTemp("", "herdr-theme-test-*")
+	if err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		os.Exit(2)
+	}
+	for _, key := range []string{"HERDR_ENV", "HERDR_PLUGIN_ID", "HERDR_PLUGIN_CONTEXT_JSON", "HERDR_SOCKET_PATH", "HERDR_PLUGIN_ROOT"} {
+		os.Unsetenv(key)
+	}
+	for key, dir := range map[string]string{
+		"HOME": "home", "USERPROFILE": "home", "APPDATA": "appdata", "LOCALAPPDATA": "localappdata",
+		"XDG_CONFIG_HOME": "xdg-config", "XDG_STATE_HOME": "xdg-state", "XDG_CACHE_HOME": "xdg-cache",
+		"HERDR_PLUGIN_STATE_DIR": "state",
+	} {
+		os.Setenv(key, filepath.Join(root, dir))
+	}
+	os.Setenv("HERDR_CONFIG_PATH", filepath.Join(root, "config", "config.toml"))
+	os.Setenv("HERDR_BIN_PATH", filepath.Join(root, "missing-herdr"))
+	os.Setenv("HERDR_THEME_CLIENT_PID", "invalid")
+	return func() { os.RemoveAll(root) }
 }
 
 func CopyExecutable(t *testing.T, path string) {

@@ -1,6 +1,6 @@
 id = "herdr-theme-picker"
 name = "Theme Picker"
-version = "0.9.0"
+version = "0.10.0"
 min_herdr_version = "0.8.0"
 description = "Pick any terminalcolors.com theme and apply it to Herdr's UI via [theme.custom]."
 platforms = ["linux", "macos", "windows"]
@@ -12,14 +12,6 @@ command = ["go", "build", "-o", "herdr-theme-picker", "./cmd/herdr-theme-picker"
 [[build]]
 platforms = ["windows"]
 command = ["go", "build", "-o", "herdr-theme-picker.exe", "./cmd/herdr-theme-picker"]
-
-[[startup]]
-platforms = ["linux", "macos"]
-command = ["./herdr-theme-picker", "startup"]
-
-[[startup]]
-platforms = ["windows"]
-command = ["./herdr-theme-picker.exe", "startup"]
 
 [[panes]]
 id = "picker"
@@ -37,15 +29,9 @@ command = ["./herdr-theme-picker", "open"]
 
 [[actions]]
 id = "sync"
-title = "Theme picker: sync"
+title = "Theme picker: sync terminal colors"
 contexts = ["global"]
 command = ["./herdr-theme-picker", "sync"]
-
-[[actions]]
-id = "restart"
-title = "Theme picker: start sync daemon"
-contexts = ["global"]
-command = ["./herdr-theme-picker", "startup"]
 
 [[keys.command]]
 key = "prefix+t"

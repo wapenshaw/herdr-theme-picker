@@ -77,7 +77,7 @@ func RunPicker() error {
 }
 
 func pickerItems() (string, error) {
-	users, err := readIndex(UserIndexFile(), true)
+	users, err := readUserIndex()
 	if err != nil {
 		return "", err
 	}
@@ -88,8 +88,9 @@ func pickerItems() (string, error) {
 	applied := ""
 	if data, err := os.ReadFile(AppliedFile()); err == nil {
 		applied = strings.TrimSpace(string(data))
-		if !IsValidSlug(applied) {
-			return "", fmt.Errorf("invalid applied theme marker")
+		if applied != "" && !IsValidSlug(applied) && !IsUserTheme(applied) {
+			fmt.Fprintf(os.Stderr, "Ignoring unsupported saved theme %q; choose a theme to replace it.\n", applied)
+			applied = ""
 		}
 	} else if !errors.Is(err, os.ErrNotExist) {
 		return "", err
@@ -102,7 +103,8 @@ func pickerItems() (string, error) {
 	}
 	for _, slug := range users {
 		if _, err := userThemePath(slug); err != nil {
-			return "", err
+			fmt.Fprintf(os.Stderr, "Skipping unavailable user theme %q: %v\n", slug, err)
+			continue
 		}
 		if !seen[slug] {
 			rows = append(rows, "★ "+slug)
@@ -170,10 +172,6 @@ func saveUserTheme(slug, body string) error {
 	if _, err := ParsePaletteContent(body); err != nil {
 		return err
 	}
-	current, err := readIndex(UserIndexFile(), true)
-	if err != nil {
-		return err
-	}
 	if err := os.MkdirAll(UserThemesDir(), 0o755); err != nil {
 		return err
 	}
@@ -188,16 +186,7 @@ func saveUserTheme(slug, body string) error {
 	if err := atomicWriteFile(dest, []byte(body), 0o644); err != nil {
 		return err
 	}
-	found := false
-	for _, item := range current {
-		if item == slug {
-			found = true
-		}
-	}
-	if !found {
-		current = append(current, slug)
-	}
-	if err := atomicWriteFile(UserIndexFile(), []byte(strings.Join(current, "\n")+"\n"), 0o644); err != nil {
+	if err := updateUserIndex(slug, false); err != nil {
 		return fmt.Errorf("theme saved at %s, but index update failed: %w", dest, err)
 	}
 	return nil
@@ -267,10 +256,6 @@ func deleteTheme(slug string, input io.Reader) error {
 	if !strings.EqualFold(answer, "y") && !strings.EqualFold(answer, "yes") {
 		return nil
 	}
-	current, err := readIndex(UserIndexFile(), false)
-	if err != nil {
-		return err
-	}
 	marker, err := os.ReadFile(AppliedFile())
 	if err != nil && !errors.Is(err, os.ErrNotExist) {
 		return err
@@ -278,13 +263,7 @@ func deleteTheme(slug string, input io.Reader) error {
 	if err := os.Remove(dest); err != nil {
 		return fmt.Errorf("delete theme: %w", err)
 	}
-	var kept []string
-	for _, item := range current {
-		if item != slug {
-			kept = append(kept, item)
-		}
-	}
-	indexErr := atomicWriteFile(UserIndexFile(), []byte(strings.Join(kept, "\n")+"\n"), 0o644)
+	indexErr := updateUserIndex(slug, true)
 	var markerErr error
 	if strings.TrimSpace(string(marker)) == slug {
 		markerErr = os.Remove(AppliedFile())

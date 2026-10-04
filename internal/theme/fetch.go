@@ -18,6 +18,14 @@ func ResolvePalette(slug string) (string, error) {
 
 func resolvePalette(slug, remoteURL string, client *http.Client) (string, error) {
 	if !IsValidSlug(slug) {
+		// Legacy Unix filenames are accepted only for indexed, regular user
+		// files. They must never become download URLs or arbitrary paths.
+		if path, err := userThemePath(slug); err == nil {
+			if _, err := ParsePaletteFile(path); err != nil {
+				return "", err
+			}
+			return path, nil
+		}
 		return "", fmt.Errorf("invalid slug: %s", slug)
 	}
 
@@ -56,7 +64,18 @@ func resolvePalette(slug, remoteURL string, client *http.Client) (string, error)
 		return "", err
 	}
 
-	// 4. Remote fetch
+	// 4. Reuse validated Bash downloads before requiring network access. Leave
+	// the original intact so switching between versions never loses a palette.
+	if legacy := legacyCacheDir(); legacy != "" {
+		path := filepath.Join(legacy, slug)
+		if info, err := os.Lstat(path); err == nil && info.Mode().IsRegular() {
+			if _, err := ParsePaletteFile(path); err == nil {
+				return path, nil
+			}
+		}
+	}
+
+	// 5. Remote fetch
 	if err := os.MkdirAll(cacheDir, 0o755); err != nil {
 		return "", fmt.Errorf("failed to create cache dir: %w", err)
 	}

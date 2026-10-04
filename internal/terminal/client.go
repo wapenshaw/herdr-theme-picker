@@ -17,7 +17,9 @@ const maxPayloadBytes = 1 << 20
 type Client struct {
 	PID, Parent int
 	Name, TTY   string
-	Interactive bool
+	Interactive bool // a UI client launch, local or --remote
+	Remote      bool // a UI client rendering a server on another machine
+	Bridge      bool // this machine's endpoint for another machine's --remote client
 }
 
 func (c Client) Key() string { return fmt.Sprintf("%d:%s", c.PID, c.TTY) }
@@ -38,6 +40,11 @@ func IsInteractiveCommand(args []string) bool {
 		return false
 	}
 	args = args[1:]
+	// Herdr rewrites this documented alias internally, without replacing argv.
+	if len(args) == 3 && args[0] == "session" && args[1] == "attach" {
+		name := args[2]
+		return name != "" && name != "help" && !strings.HasPrefix(name, "-")
+	}
 	if len(args) > 0 && args[0] == "client" {
 		args = args[1:]
 	}
@@ -67,6 +74,48 @@ func IsInteractiveCommand(args []string) bool {
 		}
 	}
 	return true
+}
+
+// IsRemoteLaunch reports a UI client attached to another machine's server.
+// Its theme still comes from this machine's config, like any local client.
+func IsRemoteLaunch(args []string) bool {
+	if !IsInteractiveCommand(args) {
+		return false
+	}
+	for _, arg := range args[1:] {
+		if arg == "--remote" || strings.HasPrefix(arg, "--remote=") {
+			return true
+		}
+	}
+	return false
+}
+
+// IsRemoteBridge recognizes the process sshd starts on the server for a
+// client that ran herdr --remote elsewhere. It has no local terminal.
+func IsRemoteBridge(args []string) bool {
+	return len(args) > 1 && IsHerdr(args[0]) && args[1] == "remote-client-bridge"
+}
+
+func classify(p *Client, args []string) {
+	p.Interactive = IsInteractiveCommand(args)
+	p.Remote = IsRemoteLaunch(args)
+	p.Bridge = IsRemoteBridge(args)
+}
+
+// OnlyRemoteClients reports that every client attached here came from another
+// machine, so whoever opened a plugin popup cannot see this machine's theme.
+// With local clients present the invoker is unknown and false is returned.
+func OnlyRemoteClients(processes map[int]Client) bool {
+	bridges := 0
+	for _, p := range processes {
+		if p.isInteractive() && !p.Remote {
+			return false
+		}
+		if IsHerdr(p.Name) && p.Bridge {
+			bridges++
+		}
+	}
+	return bridges > 0
 }
 
 func (c Client) isInteractive() bool {
@@ -102,10 +151,10 @@ func SelectClient(processes map[int]Client, parent int, explicit string) (Client
 	return Client{}, ErrUnavailable
 }
 
-// ActiveClients returns interactive local Herdr clients, excluding CLI commands
-// and the owning server even when they share the executable and have a TTY.
-// An explicit target limits both immediate and background synchronization.
-func ActiveClients(serverPID int, explicit string) ([]Client, error) {
+// ActiveClients returns the interactive Herdr clients on this machine, or only
+// the explicit target. Every one of them reads this machine's config, so they
+// share the selected theme. Remote bridges and CLI commands are never included.
+func ActiveClients(explicit string) ([]Client, error) {
 	processes, err := Processes()
 	if err != nil {
 		return nil, err
@@ -115,52 +164,16 @@ func ActiveClients(serverPID int, explicit string) ([]Client, error) {
 		if err != nil {
 			return nil, err
 		}
-		if client.PID == serverPID {
-			return nil, ErrUnavailable
-		}
 		return []Client{client}, nil
 	}
 	var clients []Client
 	for _, p := range processes {
-		if p.PID != serverPID && p.isInteractive() {
+		if p.isInteractive() {
 			clients = append(clients, p)
 		}
 	}
+	if len(clients) == 0 {
+		return nil, ErrUnavailable
+	}
 	return clients, nil
-}
-
-// Tracker remembers successful writes per client process and payload. Failed
-// writes are retried, and a palette edit invalidates every previous success.
-type Tracker struct {
-	payload string
-	synced  map[string]bool
-}
-
-func (t *Tracker) Sync(payload string, clients []Client, emit func(Client, string) error) error {
-	if payload != t.payload || t.synced == nil {
-		t.payload = payload
-		t.synced = make(map[string]bool)
-	}
-	active := make(map[string]bool)
-	var errs []error
-	for _, c := range clients {
-		key := c.Key()
-		active[key] = true
-		if payload == "" || t.synced[key] {
-			continue
-		}
-		if err := emit(c, payload); err != nil {
-			if !errors.Is(err, ErrUnavailable) {
-				errs = append(errs, fmt.Errorf("client %d: %w", c.PID, err))
-			}
-		} else {
-			t.synced[key] = true
-		}
-	}
-	for key := range t.synced {
-		if !active[key] {
-			delete(t.synced, key)
-		}
-	}
-	return errors.Join(errs...)
 }

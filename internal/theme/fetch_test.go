@@ -63,3 +63,24 @@ func TestDownloadValidationAndCacheRecovery(t *testing.T) {
 		})
 	}
 }
+
+func TestBashCacheIsReusedOffline(t *testing.T) {
+	t.Setenv("HERDR_PLUGIN_STATE_DIR", t.TempDir())
+	t.Setenv("XDG_CACHE_HOME", t.TempDir())
+	path := filepath.Join(legacyCacheDir(), "old-download")
+	writeTestFile(t, path, fixturePalette(t))
+	calls := 0
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { calls++; w.WriteHeader(http.StatusServiceUnavailable) }))
+	defer server.Close()
+	got, err := resolvePalette("old-download", server.URL, server.Client())
+	if err != nil || got != path || calls != 0 {
+		t.Fatalf("ignored valid Bash cache: path=%s calls=%d err=%v", got, calls, err)
+	}
+	writeTestFile(t, path, "invalid")
+	if _, err := resolvePalette("old-download", server.URL, server.Client()); err == nil {
+		t.Fatal("invalid Bash cache accepted")
+	}
+	if calls != 1 {
+		t.Fatal("invalid legacy cache prevented fetch")
+	}
+}

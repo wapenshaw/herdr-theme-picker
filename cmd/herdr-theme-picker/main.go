@@ -1,13 +1,11 @@
 package main
 
 import (
-	"context"
+	"bufio"
 	"fmt"
 	"os"
 	"os/exec"
-	"os/signal"
 	"strings"
-	"syscall"
 
 	"herdr-theme-picker/internal/terminal"
 	"herdr-theme-picker/internal/theme"
@@ -16,41 +14,45 @@ import (
 func main() {
 	args := os.Args[1:]
 	if len(args) == 0 {
-		if err := theme.RunPicker(); err != nil {
-			fmt.Fprintf(os.Stderr, "Error: %v\n", err)
-			os.Exit(1)
-		}
+		runPicker()
 		return
 	}
 
 	switch args[0] {
+	case "help", "--help", "-h":
+		fmt.Println("Usage: herdr-theme-picker [picker | apply <slug> | sync [--client <pid>] | preview <slug> | add [--clipboard] | edit <slug> | delete <slug>]")
+		fmt.Println("Themes are written to this machine's Herdr config. Clients attached with herdr --remote use their own machine's config: run the picker there.")
+		return
+	case "client-setup":
+		clientSetup()
+		return
 	case "startup":
-		if len(args) > 1 && args[1] == "--once" {
-			if err := theme.SyncAppliedTheme(); err != nil {
-				fmt.Fprintf(os.Stderr, "Error: %v\n", err)
-				os.Exit(1)
-			}
-			return
-		}
-		ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
-		defer cancel()
-		if err := theme.RunDaemon(ctx); err != nil {
-			fmt.Fprintf(os.Stderr, "Daemon error: %v\n", err)
-			os.Exit(1)
-		}
+		// Old manifests registered a startup daemon. Terminal colors are now
+		// synced only when a theme is applied, so this is a no-op.
+		return
 
 	case "sync":
+		if len(args) == 3 && args[1] == "--client" {
+			os.Setenv("HERDR_THEME_CLIENT_PID", args[2])
+		} else if len(args) != 1 {
+			fmt.Fprintln(os.Stderr, "usage: herdr-theme-picker sync [--client <pid>]")
+			os.Exit(1)
+		}
 		if err := theme.SyncAppliedTheme(); err != nil {
-			fmt.Fprintf(os.Stderr, "Error: %v\n", err)
+			if theme.IsOuterTerminalUnavailable(err) {
+				fmt.Fprintln(os.Stderr, "No Herdr client terminal found on this machine.")
+			} else {
+				fmt.Fprintf(os.Stderr, "Error: %v\n", err)
+			}
 			os.Exit(1)
 		}
 
 	case "terminal-sync":
-		if len(args) < 2 || len(args) > 3 || (len(args) == 3 && args[2] != "--ancestor") {
+		if len(args) != 2 {
 			fmt.Fprintln(os.Stderr, "usage: herdr-theme-picker terminal-sync <client-pid>")
 			os.Exit(1)
 		}
-		if err := terminal.RunHelper(args[1], len(args) == 3); err != nil {
+		if err := terminal.RunHelper(args[1]); err != nil {
 			if theme.IsOuterTerminalUnavailable(err) {
 				os.Exit(3)
 			}
@@ -64,10 +66,7 @@ func main() {
 		}
 		fmt.Print(theme.RenderSwatchFile(args[1], "editing"))
 	case "picker":
-		if err := theme.RunPicker(); err != nil {
-			fmt.Fprintf(os.Stderr, "Error: %v\n", err)
-			os.Exit(1)
-		}
+		runPicker()
 
 	case "open":
 		herdrBin := os.Getenv("HERDR_BIN_PATH")
@@ -171,4 +170,26 @@ func main() {
 		fmt.Fprintf(os.Stderr, "unknown command: %s\n", args[0])
 		os.Exit(1)
 	}
+}
+
+// runPicker opens the picker unless it is running inside Herdr while only
+// herdr --remote clients are attached. Then whoever opened it is on another
+// machine whose theme comes from its own config, so changing this machine's
+// config would not affect them; explain where to run it instead.
+func runPicker() {
+	if os.Getenv("HERDR_ENV") != "" {
+		if processes, err := terminal.Processes(); err == nil && terminal.OnlyRemoteClients(processes) {
+			clientSetup()
+			return
+		}
+	}
+	if err := theme.RunPicker(); err != nil {
+		fmt.Fprintf(os.Stderr, "Error: %v\n", err)
+		os.Exit(1)
+	}
+}
+
+func clientSetup() {
+	fmt.Println("Themes belong to your client machine.\n\nOpen a local terminal outside Herdr and run:\n\n  herdr-theme-picker picker\n\nThen use Reload config in the Herdr client you want to update.\nInstall the picker locally if you are connected to a remote server.\nThis server's theme and terminal colors are left unchanged.\n\nPress Enter to close.")
+	_, _ = bufio.NewReader(os.Stdin).ReadString('\n')
 }

@@ -6,65 +6,65 @@ import (
 	"os"
 	"os/exec"
 	"strings"
+
+	"herdr-theme-picker/internal/instance"
+	"herdr-theme-picker/internal/terminal"
 )
 
-// ApplyTheme resolves a palette for the given slug, writes the [theme.custom] block
-// into Herdr's config.toml, updates the state file, and tells Herdr to reload.
+// ApplyTheme writes [theme.custom] into this machine's Herdr config, records
+// the selection, recolors this machine's Herdr client terminals, and reloads.
+// Every Herdr client reads its own machine's config, so nothing here reaches
+// a client on another machine. Terminal sync and reload are best effort: the
+// config is the source of truth and a manual reload repairs either one.
 func ApplyTheme(slug string) error {
 	cfgPath := ConfigPath()
-	if _, err := os.Stat(cfgPath); err != nil {
-		return fmt.Errorf("config not found: %s", cfgPath)
-	}
-
 	palettePath, err := ResolvePalette(slug)
 	if err != nil {
-		return fmt.Errorf("cannot resolve theme '%s': %w", slug, err)
+		return fmt.Errorf("cannot resolve theme %q: %w", slug, err)
 	}
-
 	pal, err := ParsePaletteFile(palettePath)
 	if err != nil {
-		return fmt.Errorf("invalid palette for '%s': %w", slug, err)
+		return fmt.Errorf("invalid palette for %q: %w", slug, err)
 	}
-
 	tokens, err := PaletteToTokens(pal)
 	if err != nil {
-		return fmt.Errorf("failed to map tokens: %w", err)
+		return err
 	}
-
-	// Write custom block
+	if err := os.MkdirAll(StateDir(), 0o755); err != nil {
+		return fmt.Errorf("create state directory: %w", err)
+	}
+	lock, err := instance.Acquire(AppliedFile() + ".lock")
+	if err != nil {
+		return fmt.Errorf("lock theme selection: %w", err)
+	}
+	defer lock.Close()
 	if err := WriteCustomBlock(cfgPath, tokens); err != nil {
 		return fmt.Errorf("failed to write custom theme block: %w", err)
 	}
-
-	// Sync terminal colors
-	syncErr := SyncTerminalColors(pal, palettePath)
-
-	// Reload Herdr
-	if err := ReloadHerdr(); err != nil {
-		return errors.Join(fmt.Errorf("theme %q written, but reload failed: %w; try: herdr server reload-config", slug, err), syncErr)
-	}
-	// Mark the theme applied only after the running server accepts the reload.
-	if err := os.MkdirAll(StateDir(), 0o755); err != nil {
-		return errors.Join(fmt.Errorf("theme applied, but state directory failed: %w", err), syncErr)
-	}
+	// Record the selection with the config so a later sync or failed reload
+	// can never pair the new UI theme with the previous terminal palette.
 	if err := atomicWriteFile(AppliedFile(), []byte(slug+"\n"), 0o644); err != nil {
-		return errors.Join(fmt.Errorf("theme applied, but applied marker failed: %w", err), syncErr)
+		return fmt.Errorf("theme written to %s, but selection marker failed: %w", cfgPath, err)
 	}
-	if syncErr != nil {
-		return fmt.Errorf("theme %q applied, but terminal sync failed: %w", slug, syncErr)
+	if err := SyncTerminalColors(pal, palettePath); err != nil && !errors.Is(err, terminal.ErrUnavailable) {
+		fmt.Fprintf(os.Stderr, "Warning: terminal colors not fully synced: %v\n", err)
+	}
+	if err := ReloadHerdr(); err != nil {
+		fmt.Fprintf(os.Stderr, "Theme %q saved to %s, but reload failed: %v\nUse Herdr's reload config action (default prefix+shift+r).\n", slug, cfgPath, err)
+		return nil
 	}
 	fmt.Printf("Applied theme %q.\n", slug)
 	return nil
 }
 
-// ReloadHerdr executes 'herdr server reload-config'.
+// ReloadHerdr executes 'herdr server reload-config'. A machine that only
+// connects with herdr --remote has no local server; the user reloads instead.
 func ReloadHerdr() error {
 	herdrBin := os.Getenv("HERDR_BIN_PATH")
 	if herdrBin == "" {
 		herdrBin = "herdr"
 	}
-	cmd := exec.Command(herdrBin, "server", "reload-config")
-	out, err := cmd.CombinedOutput()
+	out, err := exec.Command(herdrBin, "server", "reload-config").CombinedOutput()
 	if err != nil {
 		return fmt.Errorf("%w: %s", err, strings.TrimSpace(string(out)))
 	}

@@ -39,8 +39,9 @@ func Processes() (map[int]Client, error) {
 		pid := int(entry.ProcessID)
 		p := Client{PID: pid, Parent: int(entry.ParentProcessID), Name: windows.UTF16ToString(entry.ExeFile[:]), TTY: "console"}
 		if IsHerdr(p.Name) {
-			args, err := processArgs(pid)
-			p.Interactive = err == nil && IsInteractiveCommand(args)
+			if args, err := processArgs(pid); err == nil {
+				classify(&p, args)
+			}
 		}
 		processes[pid] = p
 		err := windows.Process32Next(snapshot, &entry)
@@ -52,23 +53,6 @@ func Processes() (map[int]Client, error) {
 		}
 	}
 	return processes, nil
-}
-
-// Emit uses an explicit target or walks ancestors inside an isolated helper,
-// where attaching and detaching cannot disturb the picker or daemon console.
-func Emit(payload string) error {
-	if explicit := os.Getenv("HERDR_THEME_CLIENT_PID"); explicit != "" {
-		processes, err := Processes()
-		if err != nil {
-			return err
-		}
-		client, err := SelectClient(processes, 0, explicit)
-		if err != nil {
-			return err
-		}
-		return EmitClient(client, payload)
-	}
-	return runHelper(HostPayload(payload), strconv.Itoa(os.Getppid()), "--ancestor")
 }
 
 // EmitClient always writes to the requested client. Environment overrides and
@@ -112,8 +96,8 @@ func IsProcessAlive(pid int) bool {
 }
 
 // RunHelper must be called only by the short-lived terminal-sync subprocess.
-// Exact targets never fall back; ancestor mode skips headless Herdr processes.
-func RunHelper(pidText string, ancestor bool) error {
+// It attaches to exactly the requested client and never falls back.
+func RunHelper(pidText string) error {
 	pid, err := strconv.Atoi(pidText)
 	if err != nil || pid <= 0 {
 		return fmt.Errorf("invalid client PID %q", pidText)
@@ -132,29 +116,15 @@ func RunHelper(pidText string, ancestor bool) error {
 	if ret, _, err := freeConsole.Call(); ret == 0 {
 		return fmt.Errorf("detach helper console: %w", err)
 	}
-	seen := make(map[int]bool)
-	attached := false
-	for pid > 0 && !seen[pid] {
-		seen[pid] = true
-		p, ok := processes[pid]
-		if !ok {
-			break
-		}
-		if p.isInteractive() {
-			if ret, _, attachErr := attachConsole.Call(uintptr(pid)); ret != 0 {
-				attached = true
-				break
-			} else if !ancestor && !errors.Is(attachErr, windows.ERROR_INVALID_HANDLE) && !errors.Is(attachErr, windows.ERROR_INVALID_PARAMETER) {
-				return fmt.Errorf("attach client console: %w", attachErr)
-			}
-		}
-		if !ancestor {
-			break
-		}
-		pid = p.Parent
-	}
-	if !attached {
+	p, ok := processes[pid]
+	if !ok || !p.isInteractive() {
 		return ErrUnavailable
+	}
+	if ret, _, attachErr := attachConsole.Call(uintptr(pid)); ret == 0 {
+		if errors.Is(attachErr, windows.ERROR_INVALID_HANDLE) || errors.Is(attachErr, windows.ERROR_INVALID_PARAMETER) {
+			return ErrUnavailable
+		}
+		return fmt.Errorf("attach client console: %w", attachErr)
 	}
 	defer freeConsole.Call()
 	f, err := os.OpenFile("CONOUT$", os.O_RDWR, 0)

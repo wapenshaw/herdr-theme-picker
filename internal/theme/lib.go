@@ -3,11 +3,19 @@ package theme
 import (
 	"fmt"
 	"regexp"
+	"runtime"
 	"strconv"
 	"strings"
 )
 
 var validSlugRe = regexp.MustCompile(`^[a-z0-9]+(?:-[a-z0-9]+)*$`)
+var legacySlugRe = regexp.MustCompile(`^[a-z0-9-]+$`)
+
+// Existing Bash names remain usable on Unix. New names always use the stricter
+// portable rule. Never permit path separators, dot segments or shell syntax.
+func isStoredUserSlug(slug string) bool {
+	return IsValidSlug(slug) || (runtime.GOOS != "windows" && len(slug) <= 255 && legacySlugRe.MatchString(slug))
+}
 
 // IsValidSlug reports whether slug consists only of lowercase letters, digits, and hyphens.
 func IsValidSlug(slug string) bool {

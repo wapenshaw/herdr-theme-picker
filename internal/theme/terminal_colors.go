@@ -7,55 +7,59 @@ import (
 	"path/filepath"
 	"strings"
 
+	"github.com/pelletier/go-toml/v2"
 	"herdr-theme-picker/internal/terminal"
 )
 
-// SyncTerminalColors emits OSC color sequences to the outer terminal and updates Ghostty theme file if present.
+// SyncTerminalColors recolors the host terminals of this machine's Herdr
+// clients (including herdr --remote clients started here) and refreshes the
+// Ghostty fragment when the user created it. Clients on other machines, and
+// terminals with no Herdr client, are never touched. It reports
+// terminal.ErrUnavailable when no client was found.
 func SyncTerminalColors(pal *Palette, palettePath string) error {
 	if err := validatePalette(pal); err != nil {
 		return err
 	}
-	var syncErrors []error
-	// Ghostty fragment persistence if configured
-	if home, err := os.UserHomeDir(); err == nil {
-		ghosttyDirs := []string{
+	var errs []error
+	// Ghostty only loads this fragment if the user includes it, so an existing
+	// file is the opt-in. Never create it.
+	if home, err := os.UserHomeDir(); err == nil && palettePath != "" {
+		for _, fragment := range []string{
 			filepath.Join(home, ".config", "ghostty", "herdr-theme"),
 			filepath.Join(home, "AppData", "Roaming", "ghostty", "herdr-theme"),
-		}
-		for _, ghosttyTheme := range ghosttyDirs {
-			if _, err := os.Stat(ghosttyTheme); err == nil {
-				data, err := os.ReadFile(palettePath)
-				if err == nil {
-					err = atomicWriteFile(ghosttyTheme, data, 0o644)
-				}
-				if err != nil {
-					syncErrors = append(syncErrors, fmt.Errorf("Ghostty theme: %w", err))
-				}
-			} else if !errors.Is(err, os.ErrNotExist) {
-				syncErrors = append(syncErrors, err)
+		} {
+			if _, err := os.Stat(fragment); errors.Is(err, os.ErrNotExist) {
+				continue
+			} else if err != nil {
+				errs = append(errs, fmt.Errorf("Ghostty theme: %w", err))
+				continue
+			}
+			data, err := os.ReadFile(palettePath)
+			if err == nil {
+				err = atomicWriteFile(fragment, data, 0o644)
+			}
+			if err != nil {
+				errs = append(errs, fmt.Errorf("Ghostty theme: %w", err))
 			}
 		}
 	}
-
+	clients, err := terminal.ActiveClients(os.Getenv("HERDR_THEME_CLIENT_PID"))
+	if err != nil {
+		return errors.Join(append(errs, err)...)
+	}
 	payload := PaletteOSCPayload(pal)
-	if payload == "" {
-		return errors.Join(syncErrors...)
-	}
-
-	// 1. Emit to current process stdout
-	if _, err := fmt.Print(payload); err != nil {
-		syncErrors = append(syncErrors, err)
-	}
-
-	// 2. Emit to outer host terminal emulator (e.g. Windows Terminal, Ghostty, WezTerm)
-	if err := terminal.Emit(payload); err != nil {
-		if errors.Is(err, terminal.ErrUnavailable) {
-			fmt.Fprintln(os.Stderr, "Host terminal sync skipped: no owning client identified. Set HERDR_THEME_CLIENT_PID to the intended Herdr client PID.")
-		} else {
-			syncErrors = append(syncErrors, err)
+	synced := 0
+	for _, client := range clients {
+		if err := terminal.EmitClient(client, payload); err == nil {
+			synced++
+		} else if !errors.Is(err, terminal.ErrUnavailable) {
+			errs = append(errs, fmt.Errorf("client %d: %w", client.PID, err))
 		}
 	}
-	return errors.Join(syncErrors...)
+	if synced == 0 && len(errs) == 0 {
+		return terminal.ErrUnavailable
+	}
+	return errors.Join(errs...)
 }
 
 // PaletteOSCPayload builds the OSC 4/10/11 color sequence string for a palette.
@@ -79,7 +83,8 @@ func PaletteOSCPayload(pal *Palette) string {
 	return sb.String()
 }
 
-// SyncAppliedTheme reads the applied theme slug from AppliedFile() and syncs outer terminal colors.
+// SyncAppliedTheme re-sends the saved selection's colors, e.g. after opening a
+// new terminal window. Without a saved selection nothing is written.
 func SyncAppliedTheme() error {
 	appliedPath := AppliedFile()
 	data, err := os.ReadFile(appliedPath)
@@ -100,6 +105,28 @@ func SyncAppliedTheme() error {
 	pal, err := ParsePaletteFile(palettePath)
 	if err != nil {
 		return fmt.Errorf("parse theme %q: %w", slug, err)
+	}
+	// A config edited independently, or a failed marker write, must never
+	// resurrect stale terminal colors from the previous selection.
+	data, err = os.ReadFile(ConfigPath())
+	if err != nil {
+		return fmt.Errorf("read config before sync: %w", err)
+	}
+	// Custom may also hold [theme.custom.light] and [theme.custom.dark] tables.
+	var cfg struct {
+		Theme struct{ Custom map[string]any }
+	}
+	if err := toml.Unmarshal(data, &cfg); err != nil {
+		return err
+	}
+	tokens, err := PaletteToTokens(pal)
+	if err != nil {
+		return err
+	}
+	for key, value := range tokens {
+		if current, _ := cfg.Theme.Custom[key].(string); !strings.EqualFold(current, value) {
+			return fmt.Errorf("saved theme %q does not match %s; run apply %s again before syncing", slug, ConfigPath(), slug)
+		}
 	}
 	return SyncTerminalColors(pal, palettePath)
 }

@@ -9,7 +9,7 @@ import (
 	"herdr-theme-picker/tests/testutil"
 )
 
-func TestMain(m *testing.M) { os.Setenv("HERDR_THEME_CLIENT_PID", "invalid"); testutil.Main(m) }
+func TestMain(m *testing.M) { testutil.Main(m) }
 
 var writeTestFile = testutil.WriteFile
 var fakeFZF = testutil.FakeFZF

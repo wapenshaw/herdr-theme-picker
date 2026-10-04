@@ -2,7 +2,6 @@ package theme_test
 
 import (
 	"bytes"
-	"errors"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -88,6 +87,68 @@ func TestConfigPreservesTOMLSyntax(t *testing.T) {
 				t.Fatalf("original backup not preserved: %v", err)
 			}
 		})
+	}
+}
+
+// Herdr layers [theme.custom.light] / [theme.custom.dark] over the base tokens
+// when auto_switch is on. They are user data; the picker owns only the base.
+func TestConfigKeepsAutoSwitchLayers(t *testing.T) {
+	want := map[string]any{
+		"light": map[string]any{"panel_bg": "#eff1f5"},
+		"dark":  map[string]any{"panel_bg": "#1e1e2e", "text": "#cdd6f4"},
+	}
+	cases := map[string]string{
+		"tables":        "[theme]\nauto_switch = true\n\n[theme.custom]\naccent = '#ffffff'\n\n[theme.custom.light]\npanel_bg = '#eff1f5'\n\n[theme.custom.dark]\npanel_bg = '#1e1e2e'\ntext = '#cdd6f4'\n\n[keys]\nprefix = 'ctrl+b'\n",
+		"dotted":        "[theme.custom]\naccent = '#ffffff'\nlight.panel_bg = '#eff1f5'\ndark.panel_bg = '#1e1e2e'\ndark.text = '#cdd6f4'\n[ui]\nwidth = 30\n",
+		"inline-custom": "[theme]\ncustom = { accent = '#ffffff', light = { panel_bg = '#eff1f5' }, dark = { panel_bg = '#1e1e2e', text = '#cdd6f4' } }\n[ui]\nwidth = 30\n",
+		"inline-theme":  "theme = { name = 'nord', custom = { light = { panel_bg = '#eff1f5' }, dark = { panel_bg = '#1e1e2e', text = '#cdd6f4' } } }\n",
+		"root-dotted":   "theme.custom.light.panel_bg = '#eff1f5'\ntheme.custom.dark.panel_bg = '#1e1e2e'\ntheme.custom.dark.text = '#cdd6f4'\n",
+	}
+	for name, initial := range cases {
+		t.Run(name, func(t *testing.T) {
+			cfg := filepath.Join(t.TempDir(), "config.toml")
+			writeTestFile(t, cfg, initial)
+			for i := 0; i < 2; i++ {
+				if err := WriteCustomBlock(cfg, map[string]string{"accent": "#123456"}); err != nil {
+					t.Fatal(err)
+				}
+				data, err := os.ReadFile(cfg)
+				if err != nil {
+					t.Fatal(err)
+				}
+				var doc map[string]any
+				if err := toml.Unmarshal(data, &doc); err != nil {
+					t.Fatalf("invalid TOML: %v\n%s", err, data)
+				}
+				custom := doc["theme"].(map[string]any)["custom"].(map[string]any)
+				if custom["accent"] != "#123456" {
+					t.Fatalf("token not updated:\n%s", data)
+				}
+				if !reflect.DeepEqual(map[string]any{"light": custom["light"], "dark": custom["dark"]}, want) {
+					t.Fatalf("auto_switch layers changed:\n%s", data)
+				}
+			}
+		})
+	}
+}
+
+func TestRepeatedWritesDoNotGrowConfig(t *testing.T) {
+	cfg := filepath.Join(t.TempDir(), "config.toml")
+	writeTestFile(t, cfg, "[theme]\nauto_switch = true\n\n[keys]\nprefix = 'ctrl+b'\n")
+	var first []byte
+	for i := 0; i < 3; i++ {
+		if err := WriteCustomBlock(cfg, map[string]string{"accent": "#123456"}); err != nil {
+			t.Fatal(err)
+		}
+		data, err := os.ReadFile(cfg)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if i == 0 {
+			first = data
+		} else if !bytes.Equal(first, data) {
+			t.Fatalf("write %d changed an already-applied config:\n%q\n%q", i+1, first, data)
+		}
 	}
 }
 
@@ -181,7 +242,7 @@ func TestEditorDiscardLeavesOriginal(t *testing.T) {
 	}
 }
 
-func TestEditorSaveCommitsAndReportsApplyFailure(t *testing.T) {
+func TestEditorSaveCommitsWithoutServerReload(t *testing.T) {
 	t.Setenv("HOME", t.TempDir())
 	t.Setenv("USERPROFILE", t.TempDir())
 	t.Setenv("HERDR_PLUGIN_STATE_DIR", t.TempDir())
@@ -212,8 +273,8 @@ func TestEditorSaveCommitsAndReportsApplyFailure(t *testing.T) {
 	originalStdin, originalStdout := os.Stdin, os.Stdout
 	os.Stdin, os.Stdout = stdin, stdout
 	t.Cleanup(func() { os.Stdin, os.Stdout = originalStdin, originalStdout })
-	if err := EditTheme("editable"); err == nil || !strings.Contains(err.Error(), "simulated reload failure") {
-		t.Fatalf("apply failure swallowed: %v", err)
+	if err := EditTheme("editable"); err != nil {
+		t.Fatalf("local save depended on a server reload: %v", err)
 	}
 	pal, err := ParsePaletteFile(filepath.Join(UserThemesDir(), "editable"))
 	if err != nil || pal.Overrides["accent"] != "#654321" {
@@ -232,7 +293,7 @@ func TestEditorSaveCommitsAndReportsApplyFailure(t *testing.T) {
 	}
 }
 
-func TestApplyReportsReloadFailure(t *testing.T) {
+func TestApplySavesWithoutServerReload(t *testing.T) {
 	t.Setenv("HOME", t.TempDir())
 	t.Setenv("USERPROFILE", t.TempDir())
 	t.Setenv("HERDR_PLUGIN_STATE_DIR", t.TempDir())
@@ -250,10 +311,10 @@ func TestApplyReportsReloadFailure(t *testing.T) {
 	os.Stdout = stdout
 	t.Cleanup(func() { os.Stdout = originalStdout })
 	err = ApplyTheme("dracula-default")
-	if err == nil || !strings.Contains(err.Error(), "simulated reload failure") {
-		t.Fatalf("reload error swallowed: %v", err)
+	if err != nil {
+		t.Fatalf("local save depended on a server reload: %v", err)
 	}
-	if _, err := os.Stat(AppliedFile()); !errors.Is(err, os.ErrNotExist) {
-		t.Fatal("failed reload marked theme as applied")
+	if data, err := os.ReadFile(AppliedFile()); err != nil || string(data) != "dracula-default\n" {
+		t.Fatalf("saved config and selection diverged: %q %v", data, err)
 	}
 }

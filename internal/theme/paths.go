@@ -12,23 +12,20 @@ func ConfigPath() string {
 	if custom := os.Getenv("HERDR_CONFIG_PATH"); custom != "" {
 		return custom
 	}
+	// Match Herdr's precedence on every OS, including Windows.
+	if xdg := os.Getenv("XDG_CONFIG_HOME"); xdg != "" {
+		return filepath.Join(xdg, "herdr", "config.toml")
+	}
 	if runtime.GOOS == "windows" {
 		if appData := os.Getenv("APPDATA"); appData != "" {
 			return filepath.Join(appData, "herdr", "config.toml")
 		}
-	} else if runtime.GOOS == "darwin" {
-		if home, err := os.UserHomeDir(); err == nil {
-			macSupport := filepath.Join(home, "Library", "Application Support", "herdr", "config.toml")
-			if _, err := os.Stat(macSupport); err == nil {
-				return macSupport
-			}
+		if profile := os.Getenv("USERPROFILE"); profile != "" {
+			return filepath.Join(profile, "AppData", "Roaming", "herdr", "config.toml")
 		}
 	}
 
 	// Default fallback: XDG or ~/.config
-	if xdg := os.Getenv("XDG_CONFIG_HOME"); xdg != "" {
-		return filepath.Join(xdg, "herdr", "config.toml")
-	}
 	if home, err := os.UserHomeDir(); err == nil {
 		return filepath.Join(home, ".config", "herdr", "config.toml")
 	}
@@ -70,9 +67,8 @@ func StateDir() string {
 	if state := os.Getenv("HERDR_PLUGIN_STATE_DIR"); state != "" {
 		return state
 	}
-	// Herdr supplies this path to plugin commands. Standalone sync/startup must
-	// use the same state when the plugin is installed, rather than resurrecting
-	// a different selection from the legacy standalone cache.
+	// Herdr supplies this path to plugin commands. Standalone picker/sync runs
+	// must use the same state when the plugin is installed.
 	if managed := managedStateDir(); managed != "" {
 		if info, err := os.Stat(managed); err == nil && info.IsDir() {
 			return managed
@@ -120,6 +116,17 @@ func CacheDir() string {
 	return filepath.Join(StateDir(), "cache")
 }
 
+// Bash stored downloads directly in this directory, even for managed installs.
+func legacyCacheDir() string {
+	if xdg := os.Getenv("XDG_CACHE_HOME"); xdg != "" {
+		return filepath.Join(xdg, "herdr-theme-picker")
+	}
+	if home, err := os.UserHomeDir(); err == nil {
+		return filepath.Join(home, ".cache", "herdr-theme-picker")
+	}
+	return ""
+}
+
 // UserThemesDir returns the directory storing user-added themes.
 func UserThemesDir() string {
 	return filepath.Join(StateDir(), "themes")
@@ -131,6 +138,7 @@ func UserIndexFile() string {
 }
 
 // AppliedFile returns the path to the file storing the active theme slug.
+// It is per machine, like the config it describes, and matches Bash's name.
 func AppliedFile() string {
 	return filepath.Join(StateDir(), "applied")
 }

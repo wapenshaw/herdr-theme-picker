@@ -5,6 +5,11 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"path/filepath"
+	"reflect"
+	"regexp"
+	"sort"
+	"strconv"
 	"strings"
 	"time"
 
@@ -15,13 +20,21 @@ import (
 // WriteCustomBlock replaces or appends the [theme.custom] section in Herdr's config.toml.
 func WriteCustomBlock(cfgPath string, tokens map[string]string) error {
 	data, err := os.ReadFile(cfgPath)
-	if err != nil {
+	missing := errors.Is(err, os.ErrNotExist)
+	if err != nil && !missing {
 		return err
 	}
 
 	updated, err := replaceCustomTokens(data, tokens)
 	if err != nil {
 		return err
+	}
+	if missing {
+		// Herdr works without a config; create one without inventing a backup.
+		if err := os.MkdirAll(filepath.Dir(cfgPath), 0o700); err != nil {
+			return err
+		}
+		return atomicWriteFile(cfgPath, updated, 0o600)
 	}
 	// Keep one backup of the original config each day. Never overwrite it.
 	bak := cfgPath + ".bak-" + time.Now().Format("20060102")
@@ -96,7 +109,15 @@ func replaceCustomTokens(data []byte, tokens map[string]string) ([]byte, error) 
 				inlineTheme = true
 			}
 		}
-		if !(len(path) == 1 && path[0] == "theme" && inlineTheme) && (len(path) < 2 || path[0] != "theme" || path[1] != "custom") {
+		owned := len(path) == 1 && path[0] == "theme" && inlineTheme
+		if len(path) >= 2 && path[0] == "theme" && path[1] == "custom" {
+			// Keep auto_switch layers written as [theme.custom.light|dark]
+			// tables. Any other spelling (dotted or inline) also defines
+			// theme.custom, which would clash with the appended header, so it
+			// is removed and re-emitted as a table below.
+			owned = layerName(table) == ""
+		}
+		if !owned {
 			continue
 		}
 		start = bytes.LastIndexByte(data[:start], '\n') + 1
@@ -116,13 +137,19 @@ func replaceCustomTokens(data []byte, tokens map[string]string) ([]byte, error) 
 	if bytes.Contains(data, []byte("\r\n")) {
 		nl = "\r\n"
 	}
-	if out.Len() > 0 && !bytes.HasSuffix(out.Bytes(), []byte("\n")) {
+	// Drop trailing blank lines so repeated applies do not grow the file.
+	out.Truncate(len(bytes.TrimRight(out.Bytes(), "\r\n")))
+	if out.Len() > 0 {
 		out.WriteString(nl)
 	}
+	layers := customLayers(document)
 	if inlineTheme {
-		custom := make(map[string]string)
+		custom := make(map[string]any)
 		for key, value := range tokens {
 			custom[key], _ = normalizeColor(value)
+		}
+		for name, layer := range layers {
+			custom[name] = layer
 		}
 		theme := document["theme"].(map[string]any)
 		theme["custom"] = custom
@@ -133,6 +160,11 @@ func replaceCustomTokens(data []byte, tokens map[string]string) ([]byte, error) 
 		out.WriteString(nl)
 		out.WriteString(strings.ReplaceAll(string(encoded), "\n", nl))
 	} else {
+		var kept map[string]any
+		if err := toml.Unmarshal(out.Bytes(), &kept); err != nil {
+			return nil, fmt.Errorf("invalid TOML after removing old tokens: %w", err)
+		}
+		keptLayers := customLayers(kept)
 		out.WriteString(nl + "[theme.custom]" + nl)
 		for _, k := range TokenOrder {
 			if v, ok := tokens[k]; ok && v != "" {
@@ -140,9 +172,67 @@ func replaceCustomTokens(data []byte, tokens map[string]string) ([]byte, error) 
 				fmt.Fprintf(&out, "%s = %q%s", k, color, nl)
 			}
 		}
+		for _, name := range []string{"light", "dark"} {
+			layer, ok := layers[name]
+			if !ok || keptLayers[name] != nil {
+				continue
+			}
+			if err := writeLayer(&out, name, layer, nl); err != nil {
+				return nil, err
+			}
+		}
 	}
-	if err := toml.Unmarshal(out.Bytes(), &document); err != nil {
+	var updated map[string]any
+	if err := toml.Unmarshal(out.Bytes(), &updated); err != nil {
 		return nil, fmt.Errorf("invalid generated TOML: %w", err)
 	}
+	if !reflect.DeepEqual(customLayers(updated), layers) {
+		return nil, fmt.Errorf("could not preserve [theme.custom.light] / [theme.custom.dark]")
+	}
 	return out.Bytes(), nil
+}
+
+// layerName returns "light" or "dark" for a path inside an auto_switch layer.
+func layerName(path []string) string {
+	if len(path) >= 3 && path[0] == "theme" && path[1] == "custom" && (path[2] == "light" || path[2] == "dark") {
+		return path[2]
+	}
+	return ""
+}
+
+// customLayers returns the user's [theme.custom.light] / [theme.custom.dark]
+// overrides. Herdr applies them on top of [theme.custom] when auto_switch is
+// enabled; the picker owns only the base tokens.
+func customLayers(document map[string]any) map[string]map[string]any {
+	layers := make(map[string]map[string]any)
+	theme, _ := document["theme"].(map[string]any)
+	custom, _ := theme["custom"].(map[string]any)
+	for _, name := range []string{"light", "dark"} {
+		if layer, ok := custom[name].(map[string]any); ok {
+			layers[name] = layer
+		}
+	}
+	return layers
+}
+
+var bareKeyRe = regexp.MustCompile(`^[A-Za-z0-9_-]+$`)
+
+func writeLayer(out *bytes.Buffer, name string, layer map[string]any, nl string) error {
+	keys := make([]string, 0, len(layer))
+	for key := range layer {
+		keys = append(keys, key)
+	}
+	sort.Strings(keys)
+	fmt.Fprintf(out, "%s[theme.custom.%s]%s", nl, name, nl)
+	for _, key := range keys {
+		value, ok := layer[key].(string)
+		if !ok {
+			return fmt.Errorf("cannot preserve [theme.custom.%s].%s: not a string", name, key)
+		}
+		if !bareKeyRe.MatchString(key) {
+			key = strconv.Quote(key)
+		}
+		fmt.Fprintf(out, "%s = %q%s", key, value, nl)
+	}
+	return nil
 }

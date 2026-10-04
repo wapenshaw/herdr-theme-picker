@@ -1,7 +1,6 @@
 package theme_test
 
 import (
-	"os"
 	"path/filepath"
 	"runtime"
 	"testing"
@@ -43,8 +42,36 @@ func TestStandaloneStateWindowsCompatibility(t *testing.T) {
 	if got := theme.StateDir(); got != managed {
 		t.Fatalf("installed state did not take precedence: %q", got)
 	}
-	data, err := os.ReadFile(theme.AppliedFile())
-	if err != nil || string(data) != "ayu-dark\n" {
-		t.Fatalf("standalone would restore the stale selection: %q %v", data, err)
+	if got := theme.AppliedFile(); got != filepath.Join(managed, "applied") {
+		t.Fatalf("existing selection marker not reused: %q", got)
+	}
+}
+
+func TestConfigPathMatchesHerdrPrecedence(t *testing.T) {
+	root := t.TempDir()
+	t.Setenv("HERDR_CONFIG_PATH", "")
+	t.Setenv("XDG_CONFIG_HOME", filepath.Join(root, "xdg"))
+	t.Setenv("APPDATA", filepath.Join(root, "roaming"))
+	want := filepath.Join(root, "xdg", "herdr", "config.toml")
+	if got := theme.ConfigPath(); got != want {
+		t.Fatalf("XDG ignored: %s", got)
+	}
+	t.Setenv("HERDR_CONFIG_PATH", filepath.Join(root, "explicit.toml"))
+	if got := theme.ConfigPath(); got != filepath.Join(root, "explicit.toml") {
+		t.Fatalf("explicit path ignored: %s", got)
+	}
+}
+
+func TestMacConfigIgnoresApplicationSupportDecoy(t *testing.T) {
+	if runtime.GOOS != "darwin" {
+		t.Skip("macOS config resolution")
+	}
+	root := t.TempDir()
+	t.Setenv("HOME", root)
+	t.Setenv("HERDR_CONFIG_PATH", "")
+	t.Setenv("XDG_CONFIG_HOME", "")
+	writeTestFile(t, filepath.Join(root, "Library", "Application Support", "herdr", "config.toml"), "")
+	if got := theme.ConfigPath(); got != filepath.Join(root, ".config", "herdr", "config.toml") {
+		t.Fatalf("picked unused config: %s", got)
 	}
 }

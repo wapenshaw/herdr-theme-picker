@@ -34,8 +34,7 @@ func TestExactHelperDoesNotFallBackToAnotherHerdr(t *testing.T) {
 }
 
 func TestInvalidExplicitPIDIsRejectedBeforeHelper(t *testing.T) {
-	t.Setenv("HERDR_THEME_CLIENT_PID", "invalid")
-	if err := terminal.Emit(""); err == nil || errors.Is(err, terminal.ErrUnavailable) {
+	if _, err := terminal.ActiveClients("invalid"); err == nil || errors.Is(err, terminal.ErrUnavailable) {
 		t.Fatalf("invalid override was ignored: %v", err)
 	}
 }
@@ -57,8 +56,8 @@ func TestCLICommandsNeverReceiveHostQueries(t *testing.T) {
 			pid := startIsolatedHerdr(t, args...)
 			// A CLI process has a real console and the same executable name.
 			// Neither discovery nor an explicit PID can authorize recoloring it.
-			clients, err := terminal.ActiveClients(0, "")
-			if err != nil {
+			clients, err := terminal.ActiveClients("")
+			if err != nil && !errors.Is(err, terminal.ErrUnavailable) {
 				t.Fatal(err)
 			}
 			for _, c := range clients {
@@ -66,7 +65,7 @@ func TestCLICommandsNeverReceiveHostQueries(t *testing.T) {
 					t.Fatal("CLI command was discovered as an attached client")
 				}
 			}
-			if _, err := terminal.ActiveClients(0, strconv.Itoa(pid)); err == nil {
+			if _, err := terminal.ActiveClients(strconv.Itoa(pid)); err == nil {
 				t.Fatal("explicit PID bypassed CLI rejection")
 			}
 			if err := terminal.EmitClient(terminal.Client{PID: pid}, "\033]11;#123456\007"); !errors.Is(err, terminal.ErrUnavailable) {
@@ -78,7 +77,7 @@ func TestCLICommandsNeverReceiveHostQueries(t *testing.T) {
 
 func TestClientDiscoveryPreservesSessionArguments(t *testing.T) {
 	pid := startIsolatedHerdr(t, "--session", "work projects")
-	clients, err := terminal.ActiveClients(0, strconv.Itoa(pid))
+	clients, err := terminal.ActiveClients(strconv.Itoa(pid))
 	if err != nil || len(clients) != 1 || clients[0].PID != pid {
 		t.Fatalf("could not discover named-session client: %v %v", clients, err)
 	}
