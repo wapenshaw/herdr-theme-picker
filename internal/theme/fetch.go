@@ -2,24 +2,21 @@ package theme
 
 import (
 	"fmt"
-	"io"
-	"net/http"
 	"os"
 	"path/filepath"
-	"time"
 )
 
-const baseURL = "https://terminalcolors.com/downloads/ghostty"
+// Hyperlink formats an OSC 8 terminal hyperlink for terminals that support it,
+// while keeping the target visible for terminals that auto-detect URLs.
+func Hyperlink(url, text string) string {
+	return fmt.Sprintf("\033]8;;%s\033\\%s\033]8;;\033\\", url, text)
+}
 
 // ResolvePalette gives custom themes precedence over bundled and cached themes.
 func ResolvePalette(slug string) (string, error) {
-	return resolvePalette(slug, baseURL, &http.Client{Timeout: 15 * time.Second})
-}
-
-func resolvePalette(slug, remoteURL string, client *http.Client) (string, error) {
 	if !IsValidSlug(slug) {
 		// Legacy Unix filenames are accepted only for indexed, regular user
-		// files. They must never become download URLs or arbitrary paths.
+		// files. They must never become arbitrary paths.
 		if path, err := userThemePath(slug); err == nil {
 			if _, err := ParsePaletteFile(path); err != nil {
 				return "", err
@@ -49,7 +46,7 @@ func resolvePalette(slug, remoteURL string, client *http.Client) (string, error)
 		return bundlePath, nil
 	}
 
-	// 3. Cached theme
+	// 3. Cached theme (retained if previously downloaded or user-cached)
 	cacheDir := CacheDir()
 	cachePath := filepath.Join(cacheDir, slug)
 	if info, err := os.Lstat(cachePath); err == nil {
@@ -59,13 +56,11 @@ func resolvePalette(slug, remoteURL string, client *http.Client) (string, error)
 		if _, err := ParsePaletteFile(cachePath); err == nil {
 			return cachePath, nil
 		}
-		// Invalid/partial caches are fetched again instead of poisoning future picks.
 	} else if !os.IsNotExist(err) {
 		return "", err
 	}
 
-	// 4. Reuse validated Bash downloads before requiring network access. Leave
-	// the original intact so switching between versions never loses a palette.
+	// 4. Reuse validated Bash downloads if present
 	if legacy := legacyCacheDir(); legacy != "" {
 		path := filepath.Join(legacy, slug)
 		if info, err := os.Lstat(path); err == nil && info.Mode().IsRegular() {
@@ -75,34 +70,5 @@ func resolvePalette(slug, remoteURL string, client *http.Client) (string, error)
 		}
 	}
 
-	// 5. Remote fetch
-	if err := os.MkdirAll(cacheDir, 0o755); err != nil {
-		return "", fmt.Errorf("failed to create cache dir: %w", err)
-	}
-
-	url := fmt.Sprintf("%s/%s", remoteURL, slug)
-	resp, err := client.Get(url)
-	if err != nil {
-		return "", fmt.Errorf("failed to fetch '%s' (offline or not found): %w", slug, err)
-	}
-	defer resp.Body.Close()
-
-	if resp.StatusCode != http.StatusOK {
-		return "", fmt.Errorf("failed to fetch '%s' (status %d)", slug, resp.StatusCode)
-	}
-
-	body, err := io.ReadAll(io.LimitReader(resp.Body, maxPaletteBytes+1))
-	if err != nil {
-		return "", fmt.Errorf("failed to read response: %w", err)
-	}
-
-	if _, err := ParsePaletteContent(string(body)); err != nil {
-		return "", fmt.Errorf("invalid downloaded palette for %q: %w", slug, err)
-	}
-
-	if err := atomicWriteFile(cachePath, body, 0o644); err != nil {
-		return "", fmt.Errorf("failed to write cache: %w", err)
-	}
-
-	return cachePath, nil
+	return "", fmt.Errorf("theme %q not found (browse 400+ themes at %s and import via clipboard or editor)", slug, Hyperlink("https://terminalcolors.com", "https://terminalcolors.com"))
 }

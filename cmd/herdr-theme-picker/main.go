@@ -21,6 +21,7 @@ func main() {
 	case "help", "--help", "-h":
 		fmt.Println("Usage: herdr-theme-picker [picker | apply <slug> | sync [--client <pid>] | preview <slug> | add [--clipboard] | edit <slug> | delete <slug>]")
 		fmt.Println("Themes are written to this machine's Herdr config. Clients attached with herdr --remote use their own machine's config: run the picker there.")
+		fmt.Printf("Browse 400+ additional themes at: %s\n", theme.Hyperlink("https://terminalcolors.com", "https://terminalcolors.com"))
 		return
 	case "client-setup":
 		theme.ShowClientSetup()
@@ -99,11 +100,17 @@ func main() {
 		if strings.HasPrefix(row, "+ Add from clipboard") {
 			fmt.Println("  Reads a ghostty-format palette from your clipboard,")
 			fmt.Println("  asks a name, saves and applies — no editor.")
+			fmt.Println()
+			fmt.Println("  Browse 400+ themes:")
+			fmt.Printf("  %s (Download → Ghostty)\n", theme.Hyperlink("https://terminalcolors.com", "https://terminalcolors.com"))
 			return
 		}
 		if strings.HasPrefix(row, "+ Add new theme") {
 			fmt.Println("  Opens an editor to paste a")
 			fmt.Println("  ghostty-format theme; name it, saved and applied.")
+			fmt.Println()
+			fmt.Println("  Browse 400+ themes:")
+			fmt.Printf("  %s (Download → Ghostty)\n", theme.Hyperlink("https://terminalcolors.com", "https://terminalcolors.com"))
 			return
 		}
 

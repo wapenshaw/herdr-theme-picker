@@ -96,8 +96,7 @@ Get-Process herdr | Select-Object Id, ProcessName, StartTime
 | `$env:EDITOR = 'code --wait'`, then **Tab** | VS Code opens and the picker waits. |
 | **Ctrl-E** on a `★` theme, change one hex, choose **Save & apply** | The override is saved, then applied. |
 | **Ctrl-D** on a `★` theme, answer `y` | The theme is removed. The bundled themes are still there. |
-| Restart the picker | The `✓` mark persists. User themes live in `%LOCALAPPDATA%\herdr\plugins\herdr-theme-picker` if the plugin is installed, else `%LOCALAPPDATA%\herdr-theme-picker`. |
-| Apply an unbundled slug: `.\herdr-theme-picker.exe apply <slug>` | Downloaded from terminalcolors.com and cached; works offline afterwards. |
+| Apply an unknown slug: `.\herdr-theme-picker.exe apply nonexistent` | Fails with message containing terminalcolors.com link; exit 1. |
 
 ## 5. Config edge cases
 

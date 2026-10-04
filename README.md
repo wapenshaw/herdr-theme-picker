@@ -147,7 +147,7 @@ them.
 
 ```sh
 herdr-theme-picker picker                 # interactive picker
-herdr-theme-picker apply dracula-default  # apply by name (fetches unbundled themes)
+herdr-theme-picker apply dracula-default  # apply by name
 herdr-theme-picker sync                   # re-send the applied colors to local clients
 herdr-theme-picker sync --client 12345    # ... to one client PID only
 herdr-theme-picker preview dracula-default
@@ -156,9 +156,10 @@ herdr-theme-picker edit my-theme
 herdr-theme-picker delete my-theme
 ```
 
-Bundled palettes work offline. Downloads are validated before they are cached,
-and Bash-era downloads in `${XDG_CACHE_HOME:-~/.cache}/herdr-theme-picker` are
-reused offline.
+Bundled palettes (112 curated themes) work completely offline. Custom themes can
+be imported from clipboard or editor (copy any Ghostty palette from
+[terminalcolors.com](https://terminalcolors.com)), and Bash-era downloads in
+`${XDG_CACHE_HOME:-~/.cache}/herdr-theme-picker` are reused offline.
 
 ## Configuration and state
 

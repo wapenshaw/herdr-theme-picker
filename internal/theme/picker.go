@@ -45,8 +45,9 @@ func RunPicker() error {
 		if err != nil {
 			return err
 		}
+		header := fmt.Sprintf("↵ apply · tab/+ Add: new · ctrl-e edit ★ · ctrl-d delete ★ · esc cancel\nBrowse 400+ themes: %s", Hyperlink("https://terminalcolors.com", "https://terminalcolors.com"))
 		key, selection, cancelled, err := runFZF(input, "Search themes: ",
-			"↵ apply · tab/+ Add: new · ctrl-e edit ★ · ctrl-d delete ★ · esc cancel",
+			header,
 			"tab,ctrl-e,ctrl-d", "preview")
 		if err != nil || cancelled {
 			return err
@@ -220,7 +221,7 @@ func AddThemeClipboard() (string, error) {
 		return "", err
 	}
 	if strings.TrimSpace(clip) == "" {
-		return "", fmt.Errorf("clipboard is empty")
+		return "", fmt.Errorf("clipboard is empty (copy a Ghostty theme from %s first)", Hyperlink("https://terminalcolors.com", "https://terminalcolors.com"))
 	}
 	return finalizeTheme(clip)
 }
