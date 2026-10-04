@@ -156,3 +156,36 @@ Follow the Bash behaviour, tightened. Implemented on `go-rewrite` (uncommitted):
   applies are byte-stable.
 - Tests run under an isolated temporary home/config/state with a missing
   `herdr` binary and an invalid client PID.
+
+## /simplify pass (2026-10-04)
+
+Applied (behaviour unchanged):
+
+- Removed daemon leftovers: `IsProcessAlive`, `Client.Key`, `Client.Parent`, and
+  the ancestor walk in `SelectClient`.
+- `EmitClient` revalidates only the target PID (`ps -p`) instead of rescanning
+  every process. `classify` parses each process's arguments once.
+- One `readIndex(path, accept)` serves the bundled and user indexes. The picker
+  checks user theme files without re-reading the index for each one.
+- `StateDir` reuses `legacyCacheDir`. `IsOuterTerminalUnavailable` was removed.
+- The client PID is passed explicitly (`SyncAppliedTheme(pid)`,
+  `SyncTerminalColors(…, pid)`); `HERDR_THEME_CLIENT_PID` is only the default.
+- The remote-only gate and the setup screen moved from `main` into
+  `theme.RunPicker` / `theme.ShowClientSetup`.
+- `replaceCustomTokens` normalizes colors once, tracks kept light/dark tables
+  while parsing instead of re-parsing its output, and writes re-emitted layers
+  with `toml.Marshal`.
+
+### Deferred follow-ups
+
+| Item | Why it was skipped | Possible approach |
+| --- | --- | --- |
+| Keep dotted or inline light/dark layers in place instead of re-emitting them as tables | A root-level `theme.custom.light.x` defines `theme.custom`, so the appended `[theme.custom]` header becomes invalid TOML. | Only if the base tokens are also written as dotted keys or inline, which complicates the CLI-friendly table output. |
+| Return an `ApplyResult{ConfigPath, SyncErr, ReloadErr}` instead of printing warnings in `ApplyTheme` | Changes the library's reporting contract and every caller (picker, editor, add). | Typed result or `*PartialError`; the CLI prints it and exits 0. |
+| Store a token or palette hash in `applied` so `sync` needs no config parse | Changes a file format the Bash version reads. | Second line in `applied`, ignored by Bash's `head -1`-style readers; verify first. |
+| Migrate Bash downloads into `<state>/cache` on first use | Behaviour change; reading in place keeps the original if you switch versions. | Copy via the validated cache write and keep the source. |
+| Fold the legacy-slug branch of `resolvePalette` into step 1 | Marginal gain for churn. | A single `resolveName` check accepting `IsValidSlug \|\| isStoredUserSlug` for local lookup only. |
+| Windows `RunHelper` revalidates the single target instead of snapshotting all processes | Cannot test natively here; Toolhelp snapshots are cheap. | `processArgs(pid)` plus a name check for that PID only. |
+| Recolor clients in parallel; overlap the picker's process scan with `pickerItems` | A handful of clients and about 10–50 ms; not worth the complexity. | `errgroup` around `EmitClient`; scan in a goroutine. |
+| Replace `Interactive`/`Remote`/`Bridge` booleans with one `Kind` | Lower priority; tests build `Client` values directly. | `type Kind int` with `None/Local/Remote/Bridge`. |
+| Share one line splitter between `updateUserIndex` and `readIndex` | `updateUserIndex` must keep raw, unrecognized lines byte for byte. | `readIndex` returns raw entries with a validity flag. |

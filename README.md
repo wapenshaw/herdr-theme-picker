@@ -211,7 +211,8 @@ go build -o herdr-theme-picker ./cmd/herdr-theme-picker
 
 Tests must not recolor live terminals, reload real Herdr sessions, or touch the
 real clipboard. Cross-build platform-sensitive changes for Windows, Linux, and
-macOS; emulator and SSH behavior needs native checks.
+macOS; emulator and SSH behavior needs native checks. Windows checks are listed in
+[docs/windows-test-plan.md](docs/windows-test-plan.md).
 
 ## License
 

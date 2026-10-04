@@ -85,3 +85,4 @@ with a client's frame output; a native check per emulator is still needed.
 
 Native checks still needed per OS: OSC setters and readback in each emulator,
 and a real `--remote` round trip.
+Windows steps are listed in [the Windows test plan](windows-test-plan.md).
