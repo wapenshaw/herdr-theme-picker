@@ -14,9 +14,10 @@ import (
 // SyncTerminalColors recolors the host terminals of this machine's Herdr
 // clients (including herdr --remote clients started here) and refreshes the
 // Ghostty fragment when the user created it. Clients on other machines, and
-// terminals with no Herdr client, are never touched. It reports
-// terminal.ErrUnavailable when no client was found.
-func SyncTerminalColors(pal *Palette, palettePath string) error {
+// terminals with no Herdr client, are never touched. A non-empty clientPID
+// limits the write to that client. It reports terminal.ErrUnavailable when no
+// client was found.
+func SyncTerminalColors(pal *Palette, palettePath, clientPID string) error {
 	if err := validatePalette(pal); err != nil {
 		return err
 	}
@@ -43,7 +44,7 @@ func SyncTerminalColors(pal *Palette, palettePath string) error {
 			}
 		}
 	}
-	clients, err := terminal.ActiveClients(os.Getenv("HERDR_THEME_CLIENT_PID"))
+	clients, err := terminal.ActiveClients(clientPID)
 	if err != nil {
 		return errors.Join(append(errs, err)...)
 	}
@@ -85,7 +86,7 @@ func PaletteOSCPayload(pal *Palette) string {
 
 // SyncAppliedTheme re-sends the saved selection's colors, e.g. after opening a
 // new terminal window. Without a saved selection nothing is written.
-func SyncAppliedTheme() error {
+func SyncAppliedTheme(clientPID string) error {
 	appliedPath := AppliedFile()
 	data, err := os.ReadFile(appliedPath)
 	if err != nil {
@@ -128,5 +129,5 @@ func SyncAppliedTheme() error {
 			return fmt.Errorf("saved theme %q does not match %s; run apply %s again before syncing", slug, ConfigPath(), slug)
 		}
 	}
-	return SyncTerminalColors(pal, palettePath)
+	return SyncTerminalColors(pal, palettePath, clientPID)
 }

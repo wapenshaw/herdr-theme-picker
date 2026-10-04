@@ -76,7 +76,7 @@ func TestSyncRejectsStaleSelectionBeforeTerminalWrite(t *testing.T) {
 		t.Fatal(err)
 	}
 	writeTestFile(t, cfg, "[theme]\nname = 'nord'\n")
-	if err := SyncAppliedTheme(); err == nil || !strings.Contains(err.Error(), "does not match") {
+	if err := SyncAppliedTheme("invalid"); err == nil || !strings.Contains(err.Error(), "does not match") {
 		t.Fatalf("stale selection reached terminal sync: %v", err)
 	}
 }
@@ -91,7 +91,7 @@ func TestSyncAcceptsConfigWithAutoSwitchLayers(t *testing.T) {
 	if err := ApplyTheme("dracula-default"); err != nil {
 		t.Fatal(err)
 	}
-	if err := SyncAppliedTheme(); err == nil || strings.Contains(err.Error(), "does not match") || strings.Contains(err.Error(), "toml") {
+	if err := SyncAppliedTheme("invalid"); err == nil || strings.Contains(err.Error(), "does not match") || strings.Contains(err.Error(), "toml") {
 		t.Fatalf("expected only the invalid test client to fail sync, got: %v", err)
 	}
 }
@@ -105,7 +105,7 @@ func TestMarkerWriteFailureIsReported(t *testing.T) {
 	if err := ApplyTheme("nord-default"); err == nil || !strings.Contains(err.Error(), "selection marker failed") {
 		t.Fatalf("marker failure swallowed: %v", err)
 	}
-	if err := SyncAppliedTheme(); err == nil {
+	if err := SyncAppliedTheme("invalid"); err == nil {
 		t.Fatal("synced an unreadable selection")
 	}
 }

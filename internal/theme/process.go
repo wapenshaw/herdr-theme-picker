@@ -8,8 +8,6 @@ import (
 	"os/exec"
 	"runtime"
 	"strings"
-
-	"herdr-theme-picker/internal/terminal"
 )
 
 type limitedBuffer struct{ buffer bytes.Buffer }
@@ -22,9 +20,6 @@ func (b *limitedBuffer) Write(p []byte) (int, error) {
 	}
 	return b.buffer.Write(p)
 }
-
-// IsOuterTerminalUnavailable identifies an unavailable host terminal.
-func IsOuterTerminalUnavailable(err error) bool { return errors.Is(err, terminal.ErrUnavailable) }
 
 // fzf runs previews in a shell. Explicitly select one so inherited SHELL and
 // FZF_DEFAULT_OPTS cannot change how our executable path is interpreted.

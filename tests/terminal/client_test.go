@@ -1,7 +1,6 @@
 package terminal_test
 
 import (
-	"errors"
 	"testing"
 
 	. "herdr-theme-picker/internal/terminal"
@@ -9,28 +8,18 @@ import (
 
 func TestTerminalClientSelection(t *testing.T) {
 	processes := map[int]Client{
-		10: {PID: 10, Parent: 1, Name: "herdr.exe", TTY: "console", Interactive: true},
-		20: {PID: 20, Parent: 10, Name: "sh"},
-		30: {PID: 30, Parent: 1, Name: "/usr/bin/herdr", TTY: "pts/9", Interactive: true},
-		40: {PID: 40, Parent: 1, Name: "herdr"},
-		50: {PID: 50, Parent: 50, Name: "cycle"},
-		60: {PID: 60, Parent: 1, Name: "herdr.exe", TTY: "console"}, // server stop
+		10: {PID: 10, Name: "herdr.exe", TTY: "console", Interactive: true},
+		20: {PID: 20, Name: "sh"},
+		30: {PID: 30, Name: "/usr/bin/herdr", TTY: "pts/9", Interactive: true},
+		40: {PID: 40, Name: "herdr"},
+		60: {PID: 60, Name: "herdr.exe", TTY: "console"}, // server stop
 	}
-	client, err := SelectClient(processes, 20, "")
-	if err != nil || client.PID != 10 {
-		t.Fatalf("wrong ancestor: %v %v", client, err)
-	}
-	for _, parent := range []int{1, 40, 50, 60} {
-		if _, err := SelectClient(processes, parent, ""); !errors.Is(err, ErrUnavailable) {
-			t.Fatalf("chose unrelated client from %d: %v", parent, err)
-		}
-	}
-	client, err = SelectClient(processes, 20, "30")
+	client, err := SelectClient(processes, "30")
 	if err != nil || client.PID != 30 {
 		t.Fatal("explicit target ignored", err)
 	}
-	for _, pid := range []string{"invalid", "0", "-1", "20", "40", "60", "999"} {
-		if _, err := SelectClient(processes, 20, pid); err == nil {
+	for _, pid := range []string{"", "invalid", "0", "-1", "20", "40", "60", "999"} {
+		if _, err := SelectClient(processes, pid); err == nil {
 			t.Errorf("accepted PID %q", pid)
 		}
 	}

@@ -15,14 +15,12 @@ const maxPayloadBytes = 1 << 20
 // Client identifies a process and its terminal. PID keeps a reattach on the
 // same Unix TTY distinct from the previous client.
 type Client struct {
-	PID, Parent int
+	PID         int
 	Name, TTY   string
 	Interactive bool // a UI client launch, local or --remote
 	Remote      bool // a UI client rendering a server on another machine
 	Bridge      bool // this machine's endpoint for another machine's --remote client
 }
-
-func (c Client) Key() string { return fmt.Sprintf("%d:%s", c.PID, c.TTY) }
 
 func IsHerdr(name string) bool {
 	name = strings.ReplaceAll(name, "\\", "/")
@@ -79,9 +77,10 @@ func IsInteractiveCommand(args []string) bool {
 // IsRemoteLaunch reports a UI client attached to another machine's server.
 // Its theme still comes from this machine's config, like any local client.
 func IsRemoteLaunch(args []string) bool {
-	if !IsInteractiveCommand(args) {
-		return false
-	}
+	return IsInteractiveCommand(args) && hasRemoteFlag(args)
+}
+
+func hasRemoteFlag(args []string) bool {
 	for _, arg := range args[1:] {
 		if arg == "--remote" || strings.HasPrefix(arg, "--remote=") {
 			return true
@@ -96,9 +95,10 @@ func IsRemoteBridge(args []string) bool {
 	return len(args) > 1 && IsHerdr(args[0]) && args[1] == "remote-client-bridge"
 }
 
+// classify is called only for processes whose name is Herdr.
 func classify(p *Client, args []string) {
 	p.Interactive = IsInteractiveCommand(args)
-	p.Remote = IsRemoteLaunch(args)
+	p.Remote = p.Interactive && hasRemoteFlag(args)
 	p.Bridge = IsRemoteBridge(args)
 }
 
@@ -111,7 +111,7 @@ func OnlyRemoteClients(processes map[int]Client) bool {
 		if p.isInteractive() && !p.Remote {
 			return false
 		}
-		if IsHerdr(p.Name) && p.Bridge {
+		if p.Bridge {
 			bridges++
 		}
 	}
@@ -122,33 +122,18 @@ func (c Client) isInteractive() bool {
 	return IsHerdr(c.Name) && c.TTY != "" && c.Interactive
 }
 
-// SelectClient chooses an explicit client or an interactive ancestor.
-// It never falls back to an unrelated process by name.
-func SelectClient(processes map[int]Client, parent int, explicit string) (Client, error) {
-	if explicit != "" {
-		pid, err := strconv.Atoi(explicit)
-		if err != nil || pid <= 0 {
-			return Client{}, fmt.Errorf("invalid HERDR_THEME_CLIENT_PID %q", explicit)
-		}
-		p, ok := processes[pid]
-		if !ok || !p.isInteractive() {
-			return Client{}, fmt.Errorf("PID %d is not a Herdr client", pid)
-		}
-		return p, nil
+// SelectClient returns the explicitly requested client. It never falls back
+// to another process by name.
+func SelectClient(processes map[int]Client, explicit string) (Client, error) {
+	pid, err := strconv.Atoi(explicit)
+	if err != nil || pid <= 0 {
+		return Client{}, fmt.Errorf("invalid HERDR_THEME_CLIENT_PID %q", explicit)
 	}
-	seen := make(map[int]bool)
-	for parent > 0 && !seen[parent] {
-		seen[parent] = true
-		p, ok := processes[parent]
-		if !ok {
-			break
-		}
-		if p.isInteractive() {
-			return p, nil
-		}
-		parent = p.Parent
+	p, ok := processes[pid]
+	if !ok || !p.isInteractive() {
+		return Client{}, fmt.Errorf("PID %d is not a Herdr client", pid)
 	}
-	return Client{}, ErrUnavailable
+	return p, nil
 }
 
 // ActiveClients returns the interactive Herdr clients on this machine, or only
@@ -160,7 +145,7 @@ func ActiveClients(explicit string) ([]Client, error) {
 		return nil, err
 	}
 	if explicit != "" {
-		client, err := SelectClient(processes, 0, explicit)
+		client, err := SelectClient(processes, explicit)
 		if err != nil {
 			return nil, err
 		}

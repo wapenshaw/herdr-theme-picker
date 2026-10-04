@@ -84,11 +84,8 @@ func StateDir() string {
 			return filepath.Join(appData, "herdr", "plugins", "state", "herdr-theme-picker")
 		}
 	}
-	if xdg := os.Getenv("XDG_CACHE_HOME"); xdg != "" {
-		return filepath.Join(xdg, "herdr-theme-picker")
-	}
-	if home, err := os.UserHomeDir(); err == nil {
-		return filepath.Join(home, ".cache", "herdr-theme-picker")
+	if legacy := legacyCacheDir(); legacy != "" {
+		return legacy
 	}
 	return filepath.Join(".", ".state")
 }
@@ -116,7 +113,8 @@ func CacheDir() string {
 	return filepath.Join(StateDir(), "cache")
 }
 
-// Bash stored downloads directly in this directory, even for managed installs.
+// legacyCacheDir is Bash's cache: its downloads, and its state when the plugin
+// was not installed. Bash stored downloads here even for managed installs.
 func legacyCacheDir() string {
 	if xdg := os.Getenv("XDG_CACHE_HOME"); xdg != "" {
 		return filepath.Join(xdg, "herdr-theme-picker")

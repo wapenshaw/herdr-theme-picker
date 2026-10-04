@@ -15,32 +15,32 @@ import (
 	"time"
 )
 
-func Processes() (map[int]Client, error) {
+// Processes lists every process on this machine.
+func Processes() (map[int]Client, error) { return listProcesses("-e") }
+
+// listProcesses runs ps with a process selector (-e, or -p <pid>).
+func listProcesses(selector ...string) (map[int]Client, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
 	defer cancel()
-	out, err := exec.CommandContext(ctx, "ps", "-eo", "pid,ppid,tty,comm").Output()
+	out, err := exec.CommandContext(ctx, "ps", append(selector, "-o", "pid,tty,comm")...).Output()
 	if err != nil {
 		return nil, fmt.Errorf("locate terminal client: %w", err)
 	}
 	processes := make(map[int]Client)
 	for _, line := range strings.Split(string(out), "\n") {
 		fields := strings.Fields(line)
-		if len(fields) < 4 {
+		if len(fields) < 3 {
 			continue
 		}
 		pid, err := strconv.Atoi(fields[0])
 		if err != nil {
 			continue
 		}
-		parent, err := strconv.Atoi(fields[1])
-		if err != nil {
-			continue
-		}
-		tty := fields[2]
+		tty := fields[1]
 		if tty == "?" || tty == "??" || tty == "-" {
 			tty = ""
 		}
-		p := Client{PID: pid, Parent: parent, TTY: tty, Name: strings.Join(fields[3:], " ")}
+		p := Client{PID: pid, TTY: tty, Name: strings.Join(fields[2:], " ")}
 		// Remote bridges have no TTY, but their arguments are still needed to
 		// tell whether every attached client lives on another machine.
 		if IsHerdr(p.Name) {
@@ -59,9 +59,10 @@ func EmitClient(client Client, payload string) error {
 	}
 	// Revalidate immediately before opening the TTY; discovery may have raced
 	// with a detach or with a different process taking over that terminal.
-	processes, err := Processes()
+	// ps exits non-zero when the PID is gone.
+	processes, err := listProcesses("-p", strconv.Itoa(client.PID))
 	if err != nil {
-		return err
+		return ErrUnavailable
 	}
 	p, ok := processes[client.PID]
 	if !ok || !p.isInteractive() || p.TTY != client.TTY {
@@ -89,17 +90,6 @@ func EmitClient(client Client, payload string) error {
 	defer f.Close()
 	_, err = f.WriteString(HostPayload(payload))
 	return err
-}
-
-func IsProcessAlive(pid int) bool {
-	if pid <= 0 {
-		return false
-	}
-	process, err := os.FindProcess(pid)
-	if err != nil {
-		return false
-	}
-	return process.Signal(syscall.Signal(0)) == nil
 }
 
 func RunHelper(string) error { return fmt.Errorf("console helper is Windows-only") }

@@ -52,33 +52,32 @@ func atomicWriteFile(path string, data []byte, mode os.FileMode) error {
 	return replaceFile(f.Name(), path)
 }
 
-func readIndex(path string, optional bool) ([]string, error) {
+// readIndex returns an index file's unique non-blank entries, split into
+// accepted slugs and rejected entries.
+func readIndex(path string, accept func(string) bool) (slugs, rejected []string, err error) {
 	data, err := os.ReadFile(path)
-	if optional && errors.Is(err, os.ErrNotExist) {
-		return nil, nil
-	}
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
-	var slugs []string
 	seen := make(map[string]bool)
 	for _, line := range strings.Split(string(data), "\n") {
 		slug := strings.TrimSpace(line)
-		if slug == "" {
+		if slug == "" || seen[slug] {
 			continue
 		}
-		if !IsValidSlug(slug) {
-			return nil, fmt.Errorf("invalid slug %q in %s", slug, path)
-		}
-		if !seen[slug] {
+		seen[slug] = true
+		if accept(slug) {
 			slugs = append(slugs, slug)
-			seen[slug] = true
+		} else {
+			rejected = append(rejected, slug)
 		}
 	}
-	return slugs, nil
+	return slugs, rejected, nil
 }
 
-func userThemePath(slug string) (string, error) {
+// userThemeFile returns a stored user theme's path. User theme operations
+// never follow links outside their storage directory.
+func userThemeFile(slug string) (string, error) {
 	if !isStoredUserSlug(slug) {
 		return "", fmt.Errorf("invalid slug: %q", slug)
 	}
@@ -87,9 +86,17 @@ func userThemePath(slug string) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	// User theme operations never follow links outside their storage directory.
 	if !info.Mode().IsRegular() {
 		return "", fmt.Errorf("user theme is not a regular file: %s", slug)
+	}
+	return path, nil
+}
+
+// userThemePath is userThemeFile restricted to themes listed in the index.
+func userThemePath(slug string) (string, error) {
+	path, err := userThemeFile(slug)
+	if err != nil {
+		return "", err
 	}
 	slugs, err := readUserIndex()
 	if err != nil {
@@ -106,28 +113,14 @@ func userThemePath(slug string) (string, error) {
 // Invalid legacy entries must not disable the whole picker. Keep their bytes
 // on disk for recovery on the original OS, but never resolve them as paths.
 func readUserIndex() ([]string, error) {
-	data, err := os.ReadFile(UserIndexFile())
+	slugs, rejected, err := readIndex(UserIndexFile(), isStoredUserSlug)
 	if errors.Is(err, os.ErrNotExist) {
 		return nil, nil
 	}
-	if err != nil {
-		return nil, err
+	for _, slug := range rejected {
+		fmt.Fprintf(os.Stderr, "Skipping unsupported theme name %q in %s; its file and index entry are preserved. Rename it on the original system to import it here.\n", slug, UserIndexFile())
 	}
-	var slugs []string
-	seen := make(map[string]bool)
-	for _, line := range strings.Split(string(data), "\n") {
-		slug := strings.TrimSpace(line)
-		if slug == "" || seen[slug] {
-			continue
-		}
-		seen[slug] = true
-		if !isStoredUserSlug(slug) {
-			fmt.Fprintf(os.Stderr, "Skipping unsupported theme name %q in %s; its file and index entry are preserved. Rename it on the original system to import it here.\n", slug, UserIndexFile())
-			continue
-		}
-		slugs = append(slugs, slug)
-	}
-	return slugs, nil
+	return slugs, err
 }
 
 // Preserve unrecognized entries rather than silently deleting legacy data when

@@ -8,6 +8,8 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+
+	"herdr-theme-picker/internal/terminal"
 )
 
 const (
@@ -28,7 +30,16 @@ const (
 )
 
 // RunPicker uses a loop so repeated deletion/editing never grows the call stack.
+// Inside Herdr with only herdr --remote clients attached, whoever opened it is
+// on another machine whose theme comes from its own config, so changing this
+// machine's config would not affect them; it explains where to run it instead.
 func RunPicker() error {
+	if os.Getenv("HERDR_ENV") != "" {
+		if processes, err := terminal.Processes(); err == nil && terminal.OnlyRemoteClients(processes) {
+			ShowClientSetup()
+			return nil
+		}
+	}
 	for {
 		input, err := pickerItems()
 		if err != nil {
@@ -76,14 +87,24 @@ func RunPicker() error {
 	}
 }
 
+// ShowClientSetup explains how a remote client picks its own theme.
+func ShowClientSetup() {
+	fmt.Println("Themes belong to your client machine.\n\nOpen a local terminal outside Herdr and run:\n\n  herdr-theme-picker picker\n\nThen use Reload config in the Herdr client you want to update.\nInstall the picker locally if you are connected to a remote server.\nThis server's theme and terminal colors are left unchanged.\n\nPress Enter to close.")
+	_, _ = bufio.NewReader(os.Stdin).ReadString('\n')
+}
+
 func pickerItems() (string, error) {
 	users, err := readUserIndex()
 	if err != nil {
 		return "", err
 	}
-	bundled, err := readIndex(filepath.Join(PluginRoot(), "themes", "index.txt"), false)
+	bundledIndex := filepath.Join(PluginRoot(), "themes", "index.txt")
+	bundled, invalid, err := readIndex(bundledIndex, IsValidSlug)
 	if err != nil {
 		return "", err
+	}
+	if len(invalid) > 0 {
+		return "", fmt.Errorf("invalid slug %q in %s", invalid[0], bundledIndex)
 	}
 	applied := ""
 	if data, err := os.ReadFile(AppliedFile()); err == nil {
@@ -102,7 +123,8 @@ func pickerItems() (string, error) {
 		seen[applied] = true
 	}
 	for _, slug := range users {
-		if _, err := userThemePath(slug); err != nil {
+		// users came from the index already; only the file needs checking.
+		if _, err := userThemeFile(slug); err != nil {
 			fmt.Fprintf(os.Stderr, "Skipping unavailable user theme %q: %v\n", slug, err)
 			continue
 		}

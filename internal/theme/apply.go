@@ -46,7 +46,7 @@ func ApplyTheme(slug string) error {
 	if err := atomicWriteFile(AppliedFile(), []byte(slug+"\n"), 0o644); err != nil {
 		return fmt.Errorf("theme written to %s, but selection marker failed: %w", cfgPath, err)
 	}
-	if err := SyncTerminalColors(pal, palettePath); err != nil && !errors.Is(err, terminal.ErrUnavailable) {
+	if err := SyncTerminalColors(pal, palettePath, os.Getenv("HERDR_THEME_CLIENT_PID")); err != nil && !errors.Is(err, terminal.ErrUnavailable) {
 		fmt.Fprintf(os.Stderr, "Warning: terminal colors not fully synced: %v\n", err)
 	}
 	if err := ReloadHerdr(); err != nil {

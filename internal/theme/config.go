@@ -7,9 +7,7 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
-	"regexp"
-	"sort"
-	"strconv"
+	"slices"
 	"strings"
 	"time"
 
@@ -70,13 +68,16 @@ func replaceCustomTokens(data []byte, tokens map[string]string) ([]byte, error) 
 	if err := toml.Unmarshal(data, &document); err != nil {
 		return nil, fmt.Errorf("invalid existing TOML: %w", err)
 	}
+	normalized := make(map[string]string, len(tokens))
 	for key, value := range tokens {
 		if !isToken(key) {
 			return nil, fmt.Errorf("unknown theme token %q", key)
 		}
-		if _, err := normalizeColor(value); err != nil {
+		color, err := normalizeColor(value)
+		if err != nil {
 			return nil, err
 		}
+		normalized[key] = color
 	}
 	var parser unstable.Parser
 	parser.Reset(data)
@@ -84,6 +85,7 @@ func replaceCustomTokens(data []byte, tokens map[string]string) ([]byte, error) 
 	var out bytes.Buffer
 	last := 0
 	inlineTheme := false
+	keptLayers := make(map[string]bool)
 	for parser.NextExpression() {
 		node := parser.Expression()
 		it := node.Key()
@@ -115,7 +117,11 @@ func replaceCustomTokens(data []byte, tokens map[string]string) ([]byte, error) 
 			// tables. Any other spelling (dotted or inline) also defines
 			// theme.custom, which would clash with the appended header, so it
 			// is removed and re-emitted as a table below.
-			owned = layerName(table) == ""
+			name := layerName(table)
+			owned = name == ""
+			if !owned {
+				keptLayers[name] = true
+			}
 		}
 		if !owned {
 			continue
@@ -145,8 +151,8 @@ func replaceCustomTokens(data []byte, tokens map[string]string) ([]byte, error) 
 	layers := customLayers(document)
 	if inlineTheme {
 		custom := make(map[string]any)
-		for key, value := range tokens {
-			custom[key], _ = normalizeColor(value)
+		for key, color := range normalized {
+			custom[key] = color
 		}
 		for name, layer := range layers {
 			custom[name] = layer
@@ -160,26 +166,23 @@ func replaceCustomTokens(data []byte, tokens map[string]string) ([]byte, error) 
 		out.WriteString(nl)
 		out.WriteString(strings.ReplaceAll(string(encoded), "\n", nl))
 	} else {
-		var kept map[string]any
-		if err := toml.Unmarshal(out.Bytes(), &kept); err != nil {
-			return nil, fmt.Errorf("invalid TOML after removing old tokens: %w", err)
-		}
-		keptLayers := customLayers(kept)
 		out.WriteString(nl + "[theme.custom]" + nl)
 		for _, k := range TokenOrder {
-			if v, ok := tokens[k]; ok && v != "" {
-				color, _ := normalizeColor(v)
+			if color, ok := normalized[k]; ok && color != "" {
 				fmt.Fprintf(&out, "%s = %q%s", k, color, nl)
 			}
 		}
-		for _, name := range []string{"light", "dark"} {
+		for _, name := range layerNames {
 			layer, ok := layers[name]
-			if !ok || keptLayers[name] != nil {
+			if !ok || keptLayers[name] {
 				continue
 			}
-			if err := writeLayer(&out, name, layer, nl); err != nil {
+			encoded, err := toml.Marshal(layer)
+			if err != nil {
 				return nil, err
 			}
+			out.WriteString(nl + "[theme.custom." + name + "]" + nl)
+			out.WriteString(strings.ReplaceAll(string(encoded), "\n", nl))
 		}
 	}
 	var updated map[string]any
@@ -192,9 +195,12 @@ func replaceCustomTokens(data []byte, tokens map[string]string) ([]byte, error) 
 	return out.Bytes(), nil
 }
 
+// layerNames are the auto_switch override tables inside [theme.custom].
+var layerNames = []string{"light", "dark"}
+
 // layerName returns "light" or "dark" for a path inside an auto_switch layer.
 func layerName(path []string) string {
-	if len(path) >= 3 && path[0] == "theme" && path[1] == "custom" && (path[2] == "light" || path[2] == "dark") {
+	if len(path) >= 3 && path[0] == "theme" && path[1] == "custom" && slices.Contains(layerNames, path[2]) {
 		return path[2]
 	}
 	return ""
@@ -207,32 +213,10 @@ func customLayers(document map[string]any) map[string]map[string]any {
 	layers := make(map[string]map[string]any)
 	theme, _ := document["theme"].(map[string]any)
 	custom, _ := theme["custom"].(map[string]any)
-	for _, name := range []string{"light", "dark"} {
+	for _, name := range layerNames {
 		if layer, ok := custom[name].(map[string]any); ok {
 			layers[name] = layer
 		}
 	}
 	return layers
-}
-
-var bareKeyRe = regexp.MustCompile(`^[A-Za-z0-9_-]+$`)
-
-func writeLayer(out *bytes.Buffer, name string, layer map[string]any, nl string) error {
-	keys := make([]string, 0, len(layer))
-	for key := range layer {
-		keys = append(keys, key)
-	}
-	sort.Strings(keys)
-	fmt.Fprintf(out, "%s[theme.custom.%s]%s", nl, name, nl)
-	for _, key := range keys {
-		value, ok := layer[key].(string)
-		if !ok {
-			return fmt.Errorf("cannot preserve [theme.custom.%s].%s: not a string", name, key)
-		}
-		if !bareKeyRe.MatchString(key) {
-			key = strconv.Quote(key)
-		}
-		fmt.Fprintf(out, "%s = %q%s", key, value, nl)
-	}
-	return nil
 }

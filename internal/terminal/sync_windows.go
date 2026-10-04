@@ -37,7 +37,7 @@ func Processes() (map[int]Client, error) {
 	processes := make(map[int]Client)
 	for {
 		pid := int(entry.ProcessID)
-		p := Client{PID: pid, Parent: int(entry.ParentProcessID), Name: windows.UTF16ToString(entry.ExeFile[:]), TTY: "console"}
+		p := Client{PID: pid, Name: windows.UTF16ToString(entry.ExeFile[:]), TTY: "console"}
 		if IsHerdr(p.Name) {
 			if args, err := processArgs(pid); err == nil {
 				classify(&p, args)
@@ -80,19 +80,6 @@ func runHelper(payload string, args ...string) error {
 		return fmt.Errorf("sync terminal: %w: %s", err, strings.TrimSpace(string(output)))
 	}
 	return nil
-}
-
-func IsProcessAlive(pid int) bool {
-	if pid <= 0 {
-		return false
-	}
-	handle, err := windows.OpenProcess(windows.PROCESS_QUERY_LIMITED_INFORMATION|windows.SYNCHRONIZE, false, uint32(pid))
-	if err != nil {
-		return false
-	}
-	defer windows.CloseHandle(handle)
-	event, err := windows.WaitForSingleObject(handle, 0)
-	return err == nil && event == uint32(windows.WAIT_TIMEOUT)
 }
 
 // RunHelper must be called only by the short-lived terminal-sync subprocess.

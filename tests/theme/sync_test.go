@@ -1,7 +1,6 @@
 package theme_test
 
 import (
-	"os"
 	"strings"
 	"testing"
 
@@ -37,22 +36,12 @@ func TestPaletteOSCPayload(t *testing.T) {
 }
 
 func TestSyncAppliedThemeMissing(t *testing.T) {
-	tmpDir := t.TempDir()
-	t.Setenv("HERDR_PLUGIN_STATE_DIR", tmpDir)
-	t.Setenv("XDG_DATA_HOME", tmpDir)
-	t.Setenv("HOME", tmpDir)
-
-	if err := SyncAppliedTheme(); err != nil {
+	t.Setenv("HERDR_PLUGIN_STATE_DIR", t.TempDir())
+	if err := SyncAppliedTheme("invalid"); err != nil {
 		t.Fatalf("expected nil when applied file does not exist, got: %v", err)
 	}
-
-	if err := os.MkdirAll(StateDir(), 0o755); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(AppliedFile(), []byte("   \n"), 0o644); err != nil {
-		t.Fatal(err)
-	}
-	if err := SyncAppliedTheme(); err != nil {
+	writeTestFile(t, AppliedFile(), "   \n")
+	if err := SyncAppliedTheme("invalid"); err != nil {
 		t.Fatalf("expected nil when applied file is empty/whitespace, got: %v", err)
 	}
 }
