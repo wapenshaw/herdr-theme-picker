@@ -1,10 +1,12 @@
-package theme
+package theme_test
 
 import (
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
+
+	. "herdr-theme-picker/internal/theme"
 )
 
 func TestSlugify(t *testing.T) {
@@ -311,7 +313,7 @@ palette = 15=#ffffff
 	}
 
 	// Delete user theme
-	if err := deleteTheme(slug, strings.NewReader("y\n")); err != nil {
+	if err := deleteFixtureTheme(t, slug, "y\n"); err != nil {
 		t.Fatalf("DeleteTheme(%q) failed: %v", slug, err)
 	}
 

@@ -265,8 +265,51 @@ their process ancestry. For these launches, set `HERDR_THEME_CLIENT_PID` to the
 intended local Herdr client's PID in the environment that launches the picker.
 The plugin verifies that PID belongs to Herdr and writes only to that client.
 If no owning client can be identified, host sync is skipped with a message;
-Herdr's UI theme and optional Ghostty persistence still update. The plugin never
-selects an unrelated Herdr process by name or recolors every open session.
+Herdr's UI theme and optional Ghostty persistence still update.
+
+Immediate sync never falls back to an unrelated process by name. The startup
+daemon restores the globally selected theme to locally discoverable Herdr host
+terminals; set `HERDR_THEME_CLIENT_PID` to limit it to one client. This override
+also applies to background sync. Remote clients cannot be discovered locally.
+
+### Restore the main terminal pane after detach and reattach
+
+See [theme persistence edge cases](docs/theme-persistence-edge-cases.md) for
+client-selection rules, daemon lifecycle, platform differences, and regression
+coverage.
+
+The startup hook runs a background sync loop for the lifetime of the Herdr
+server. It reads the persisted `applied` marker, watches for new local Herdr
+client processes, and restores the chosen foreground, background, and ANSI
+palette. A new client on the same terminal still receives a fresh sync.
+Client discovery checks the launch arguments on Windows, macOS, and Linux;
+noninteractive commands such as `herdr server stop`, `status`, and plugin
+actions are excluded, even if they have a console or TTY. The write path
+rechecks the target before sending any color queries.
+The first scan runs immediately; subsequent scans run every 100 ms on Windows
+and 500 ms on Unix. Because discovery happens after the client starts, its
+first frame can briefly show the host's original colors before sync finishes.
+
+After setting the host colors, the plugin sends OSC color queries. Herdr uses
+the replies to refresh its terminal-pane colors; writing `[theme.custom]` alone
+only updates the UI theme. The host terminal must support OSC color setting and
+queries for this readback to work.
+
+Startup hooks run when the server starts. If you link or update this plugin
+while the server is already running, start its sync loop with:
+
+```bash
+herdr plugin action invoke restart --plugin herdr-theme-picker
+```
+
+This action ensures a daemon is running; repeated invocations are a no-op.
+`herdr-theme-picker sync` (or `startup --once`) performs a one-time sync.
+Daemon errors are recorded in `HERDR_PLUGIN_STATE_DIR/sync.log`. The OS holds
+`sync.lock`; `sync.pid` is informational and can safely be stale after a crash.
+Standalone commands prefer Herdr's existing managed plugin state directory,
+so they restore the same selection as the picker. An explicit
+`HERDR_PLUGIN_STATE_DIR` takes precedence; without an installed plugin the
+legacy standalone state location is retained.
 
 ### Ghostty: persist colors for new windows
 
@@ -430,3 +473,19 @@ plugin manifests. Your `[theme.custom]` block and its backups remain in
 MIT — see [LICENSE](LICENSE).
 
 `herdr` · `herdr-plugin`
+
+## Development
+
+Build with `go build -o herdr-theme-picker ./cmd/herdr-theme-picker` (use
+`herdr-theme-picker.exe` on Windows), then run `go test ./...` and `go vet ./...`.
+
+- `cmd/herdr-theme-picker`: command routing.
+- `internal/theme`: palettes, picker/editor, config persistence, paths, and daemon.
+- `internal/terminal`: client discovery, host OSC writes/readback, and sync tracking.
+- `internal/instance`: process lock shared by startup invocations.
+- `tests/theme`, `tests/terminal`, `tests/instance`: public API and regression tests.
+- `tests/testutil`: portable fake subprocesses used by the test suites.
+
+Private helper unit tests stay next to their Go package; integration tests and
+public API tests live under `tests/`. Tests isolate plugin state and reject host
+terminal discovery so they do not recolor a running Herdr session.

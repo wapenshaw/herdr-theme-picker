@@ -43,7 +43,7 @@ command = ["./herdr-theme-picker", "sync"]
 
 [[actions]]
 id = "restart"
-title = "Theme picker: restart daemon"
+title = "Theme picker: start sync daemon"
 contexts = ["global"]
 command = ["./herdr-theme-picker", "startup"]
 

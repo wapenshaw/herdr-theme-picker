@@ -7,8 +7,9 @@ import (
 	"os"
 	"os/exec"
 	"runtime"
-	"strconv"
 	"strings"
+
+	"herdr-theme-picker/internal/terminal"
 )
 
 type limitedBuffer struct{ buffer bytes.Buffer }
@@ -22,51 +23,8 @@ func (b *limitedBuffer) Write(p []byte) (int, error) {
 	return b.buffer.Write(p)
 }
 
-var errNoOuterTerminal = errors.New("owning host terminal unavailable")
-
-// IsOuterTerminalUnavailable lets the helper CLI distinguish unavailable host
-// consoles from write failures without matching error strings.
-func IsOuterTerminalUnavailable(err error) bool { return errors.Is(err, errNoOuterTerminal) }
-
-type processInfo struct {
-	pid, parent int
-	name, tty   string
-}
-
-// Never fall back to choosing a process by name from another session.
-func selectTerminalClient(processes map[int]processInfo, parent int, explicit string) (processInfo, error) {
-	if explicit != "" {
-		pid, err := strconv.Atoi(explicit)
-		if err != nil || pid <= 0 {
-			return processInfo{}, fmt.Errorf("invalid HERDR_THEME_CLIENT_PID %q", explicit)
-		}
-		p, ok := processes[pid]
-		if !ok || !isHerdrProcess(p.name) {
-			return processInfo{}, fmt.Errorf("PID %d is not a Herdr client", pid)
-		}
-		return p, nil
-	}
-	seen := make(map[int]bool)
-	for parent > 0 && !seen[parent] {
-		seen[parent] = true
-		p, ok := processes[parent]
-		if !ok {
-			break
-		}
-		if isHerdrProcess(p.name) && p.tty != "" {
-			return p, nil
-		}
-		parent = p.parent
-	}
-	return processInfo{}, errNoOuterTerminal
-}
-
-func isHerdrProcess(name string) bool {
-	name = strings.ReplaceAll(name, "\\", "/")
-	parts := strings.Split(name, "/")
-	base := parts[len(parts)-1]
-	return base == "herdr" || strings.EqualFold(base, "herdr.exe")
-}
+// IsOuterTerminalUnavailable identifies an unavailable host terminal.
+func IsOuterTerminalUnavailable(err error) bool { return errors.Is(err, terminal.ErrUnavailable) }
 
 // fzf runs previews in a shell. Explicitly select one so inherited SHELL and
 // FZF_DEFAULT_OPTS cannot change how our executable path is interpreted.

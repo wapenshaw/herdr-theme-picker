@@ -9,6 +9,7 @@ import (
 	"strings"
 	"syscall"
 
+	"herdr-theme-picker/internal/terminal"
 	"herdr-theme-picker/internal/theme"
 )
 
@@ -45,11 +46,11 @@ func main() {
 		}
 
 	case "terminal-sync":
-		if len(args) != 2 {
+		if len(args) < 2 || len(args) > 3 || (len(args) == 3 && args[2] != "--ancestor") {
 			fmt.Fprintln(os.Stderr, "usage: herdr-theme-picker terminal-sync <client-pid>")
 			os.Exit(1)
 		}
-		if err := theme.RunTerminalSyncHelper(args[1]); err != nil {
+		if err := terminal.RunHelper(args[1], len(args) == 3); err != nil {
 			if theme.IsOuterTerminalUnavailable(err) {
 				os.Exit(3)
 			}
