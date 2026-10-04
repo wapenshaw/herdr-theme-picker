@@ -13,6 +13,14 @@ command = ["go", "build", "-o", "herdr-theme-picker", "./cmd/herdr-theme-picker"
 platforms = ["windows"]
 command = ["go", "build", "-o", "herdr-theme-picker.exe", "./cmd/herdr-theme-picker"]
 
+[[startup]]
+platforms = ["linux", "macos"]
+command = ["./herdr-theme-picker", "startup"]
+
+[[startup]]
+platforms = ["windows"]
+command = ["./herdr-theme-picker.exe", "startup"]
+
 [[panes]]
 id = "picker"
 title = "Theme Picker"

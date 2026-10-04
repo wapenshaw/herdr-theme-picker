@@ -374,6 +374,15 @@ type fzfStep struct {
 // The same test binary acts as a fake fzf or Herdr in subprocess tests. This
 // avoids assuming a POSIX shell or using platform-specific executable scripts.
 func TestMain(m *testing.M) {
+	if len(os.Args) > 2 && os.Args[1] == "terminal-sync" {
+		if err := RunTerminalSyncHelper(os.Args[2]); err != nil {
+			if IsOuterTerminalUnavailable(err) {
+				os.Exit(3)
+			}
+			os.Exit(1)
+		}
+		os.Exit(0)
+	}
 	if os.Getenv("THEME_TEST_ARGV") == "1" {
 		json.NewEncoder(os.Stdout).Encode(os.Args[1:])
 		os.Exit(0)

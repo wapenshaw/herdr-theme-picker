@@ -225,21 +225,7 @@ func SyncTerminalColors(pal *Palette, palettePath string) error {
 		}
 	}
 
-	var sb strings.Builder
-	if pal.Foreground != "" {
-		sb.WriteString(fmt.Sprintf("\033]10;%s\007", pal.Foreground))
-	}
-	if pal.Background != "" {
-		sb.WriteString(fmt.Sprintf("\033]11;%s\007", pal.Background))
-	}
-	for idx := 0; idx < 16; idx++ {
-		col := pal.PaletteColors[idx]
-		if col != "" {
-			sb.WriteString(fmt.Sprintf("\033]4;%d;%s\007", idx, col))
-		}
-	}
-
-	payload := sb.String()
+	payload := PaletteOSCPayload(pal)
 	if payload == "" {
 		return errors.Join(syncErrors...)
 	}
@@ -258,6 +244,52 @@ func SyncTerminalColors(pal *Palette, palettePath string) error {
 		}
 	}
 	return errors.Join(syncErrors...)
+}
+
+// PaletteOSCPayload builds the OSC 4/10/11 color sequence string for a palette.
+func PaletteOSCPayload(pal *Palette) string {
+	if pal == nil {
+		return ""
+	}
+	var sb strings.Builder
+	if pal.Foreground != "" {
+		sb.WriteString(fmt.Sprintf("\033]10;%s\007", pal.Foreground))
+	}
+	if pal.Background != "" {
+		sb.WriteString(fmt.Sprintf("\033]11;%s\007", pal.Background))
+	}
+	for idx := 0; idx < 16; idx++ {
+		col := pal.PaletteColors[idx]
+		if col != "" {
+			sb.WriteString(fmt.Sprintf("\033]4;%d;%s\007", idx, col))
+		}
+	}
+	return sb.String()
+}
+
+// SyncAppliedTheme reads the applied theme slug from AppliedFile() and syncs outer terminal colors.
+func SyncAppliedTheme() error {
+	appliedPath := AppliedFile()
+	data, err := os.ReadFile(appliedPath)
+	if err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			return nil
+		}
+		return fmt.Errorf("read applied theme: %w", err)
+	}
+	slug := strings.TrimSpace(string(data))
+	if slug == "" {
+		return nil
+	}
+	palettePath, err := ResolvePalette(slug)
+	if err != nil {
+		return fmt.Errorf("resolve theme %q: %w", slug, err)
+	}
+	pal, err := ParsePaletteFile(palettePath)
+	if err != nil {
+		return fmt.Errorf("parse theme %q: %w", slug, err)
+	}
+	return SyncTerminalColors(pal, palettePath)
 }
 
 // ReloadHerdr executes 'herdr server reload-config'.

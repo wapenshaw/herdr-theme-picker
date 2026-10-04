@@ -10,6 +10,7 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"syscall"
 	"time"
 )
 
@@ -47,7 +48,11 @@ func emitToOuterTerminal(payload string) error {
 	if client.tty == "" {
 		return errNoOuterTerminal
 	}
-	path := filepath.Clean(filepath.Join("/dev", client.tty))
+	return emitToTTY(client.tty, payload)
+}
+
+func emitToTTY(tty string, payload string) error {
+	path := filepath.Clean(filepath.Join("/dev", tty))
 	if !strings.HasPrefix(path, "/dev/") {
 		return fmt.Errorf("invalid client terminal path")
 	}
@@ -65,6 +70,87 @@ func emitToOuterTerminal(payload string) error {
 	defer f.Close()
 	_, err = f.WriteString(payload)
 	return err
+}
+
+func isProcessAlive(pid int) bool {
+	if pid <= 0 {
+		return false
+	}
+	process, err := os.FindProcess(pid)
+	if err != nil {
+		return false
+	}
+	return process.Signal(syscall.Signal(0)) == nil
+}
+
+func findActiveClientTTYs() ([]string, error) {
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+	out, err := exec.CommandContext(ctx, "ps", "-eo", "pid,ppid,tty,comm").Output()
+	if err != nil {
+		return nil, err
+	}
+	var ttys []string
+	for _, line := range strings.Split(string(out), "\n") {
+		fields := strings.Fields(line)
+		if len(fields) < 4 {
+			continue
+		}
+		tty := fields[2]
+		if tty == "?" || tty == "??" || tty == "-" {
+			continue
+		}
+		name := strings.Join(fields[3:], " ")
+		if isHerdrProcess(name) {
+			ttys = append(ttys, tty)
+		}
+	}
+	return ttys, nil
+}
+
+func findHerdrServerPID() int {
+	parentPID := os.Getppid()
+	out, err := exec.Command("ps", "-eo", "pid,ppid,tty,comm").Output()
+	if err != nil {
+		return parentPID
+	}
+	for _, line := range strings.Split(string(out), "\n") {
+		fields := strings.Fields(line)
+		if len(fields) < 4 {
+			continue
+		}
+		pid, err := strconv.Atoi(fields[0])
+		if err != nil {
+			continue
+		}
+		tty := fields[2]
+		name := strings.Join(fields[3:], " ")
+		if isHerdrProcess(name) && (tty == "?" || tty == "??" || tty == "-") {
+			return pid
+		}
+	}
+	return parentPID
+}
+
+func syncActiveClients(payload string, syncedTargets map[string]bool) {
+	ttys, err := findActiveClientTTYs()
+	if err != nil {
+		return
+	}
+	activeSet := make(map[string]bool)
+	for _, tty := range ttys {
+		activeSet[tty] = true
+		if !syncedTargets[tty] {
+			if err := emitToTTY(tty, payload); err == nil {
+				syncedTargets[tty] = true
+			}
+		}
+	}
+	for key := range syncedTargets {
+		if !activeSet[key] {
+			delete(syncedTargets, key)
+		}
+	}
 }
 
 func RunTerminalSyncHelper(string) error { return fmt.Errorf("console helper is Windows-only") }

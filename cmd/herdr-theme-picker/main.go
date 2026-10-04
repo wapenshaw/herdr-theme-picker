@@ -1,10 +1,13 @@
 package main
 
 import (
+	"context"
 	"fmt"
 	"os"
 	"os/exec"
+	"os/signal"
 	"strings"
+	"syscall"
 
 	"herdr-theme-picker/internal/theme"
 )
@@ -20,6 +23,27 @@ func main() {
 	}
 
 	switch args[0] {
+	case "startup":
+		if len(args) > 1 && args[1] == "--once" {
+			if err := theme.SyncAppliedTheme(); err != nil {
+				fmt.Fprintf(os.Stderr, "Error: %v\n", err)
+				os.Exit(1)
+			}
+			return
+		}
+		ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+		defer cancel()
+		if err := theme.RunDaemon(ctx); err != nil {
+			fmt.Fprintf(os.Stderr, "Daemon error: %v\n", err)
+			os.Exit(1)
+		}
+
+	case "sync":
+		if err := theme.SyncAppliedTheme(); err != nil {
+			fmt.Fprintf(os.Stderr, "Error: %v\n", err)
+			os.Exit(1)
+		}
+
 	case "terminal-sync":
 		if len(args) != 2 {
 			fmt.Fprintln(os.Stderr, "usage: herdr-theme-picker terminal-sync <client-pid>")

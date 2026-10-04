@@ -59,7 +59,7 @@ func canAttachConsole(pid int) bool {
 	return false
 }
 
-func emitToOuterTerminal(payload string) error {
+func emitToClientPID(targetPID int, payload string) error {
 	exe, err := os.Executable()
 	if err != nil {
 		return err
@@ -68,7 +68,7 @@ func emitToOuterTerminal(payload string) error {
 	defer cancel()
 	// Console ownership changes only in this short-lived process. The picker keeps
 	// its original handles for prompts, error reporting and the reload command.
-	cmd := exec.CommandContext(ctx, exe, "terminal-sync", strconv.Itoa(os.Getppid()))
+	cmd := exec.CommandContext(ctx, exe, "terminal-sync", strconv.Itoa(targetPID))
 	cmd.Stdin = strings.NewReader(payload)
 	cmd.SysProcAttr = &syscall.SysProcAttr{HideWindow: true, CreationFlags: windows.CREATE_NO_WINDOW}
 	output, err := cmd.CombinedOutput()
@@ -80,6 +80,80 @@ func emitToOuterTerminal(payload string) error {
 		return fmt.Errorf("sync terminal: %w: %s", err, strings.TrimSpace(string(output)))
 	}
 	return nil
+}
+
+func emitToOuterTerminal(payload string) error {
+	return emitToClientPID(os.Getppid(), payload)
+}
+
+func isProcessAlive(pid int) bool {
+	if pid <= 0 {
+		return false
+	}
+	handle, err := windows.OpenProcess(
+		windows.PROCESS_QUERY_LIMITED_INFORMATION|windows.SYNCHRONIZE,
+		false,
+		uint32(pid),
+	)
+	if err != nil {
+		return false
+	}
+	defer windows.CloseHandle(handle)
+	event, err := windows.WaitForSingleObject(handle, 0)
+	return err == nil && event == uint32(windows.WAIT_TIMEOUT)
+}
+
+func findActiveClientPIDs() ([]int, error) {
+	processes, err := windowsProcesses()
+	if err != nil {
+		return nil, err
+	}
+	var clients []int
+	for _, p := range processes {
+		if isHerdrProcess(p.name) && canAttachConsole(p.pid) {
+			clients = append(clients, p.pid)
+		}
+	}
+	return clients, nil
+}
+
+func findHerdrServerPID() int {
+	parentPID := os.Getppid()
+	processes, err := windowsProcesses()
+	if err != nil {
+		return parentPID
+	}
+	if p, ok := processes[parentPID]; ok && isHerdrProcess(p.name) {
+		return parentPID
+	}
+	for _, p := range processes {
+		if isHerdrProcess(p.name) && !canAttachConsole(p.pid) {
+			return p.pid
+		}
+	}
+	return parentPID
+}
+
+func syncActiveClients(payload string, syncedTargets map[string]bool) {
+	clientPIDs, err := findActiveClientPIDs()
+	if err != nil {
+		return
+	}
+	activeSet := make(map[string]bool)
+	for _, pid := range clientPIDs {
+		key := strconv.Itoa(pid)
+		activeSet[key] = true
+		if !syncedTargets[key] {
+			if err := emitToClientPID(pid, payload); err == nil {
+				syncedTargets[key] = true
+			}
+		}
+	}
+	for key := range syncedTargets {
+		if !activeSet[key] {
+			delete(syncedTargets, key)
+		}
+	}
 }
 
 func RunTerminalSyncHelper(pidText string) error {
