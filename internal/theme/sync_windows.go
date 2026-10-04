@@ -49,16 +49,17 @@ func windowsProcesses() (map[int]processInfo, error) {
 	return processes, nil
 }
 
+func canAttachConsole(pid int) bool {
+	freeConsole.Call()
+	ret, _, _ := attachConsole.Call(uintptr(pid))
+	if ret != 0 {
+		freeConsole.Call()
+		return true
+	}
+	return false
+}
+
 func emitToOuterTerminal(payload string) error {
-	processes, err := windowsProcesses()
-	if err != nil {
-		return err
-	}
-	self := processes[os.Getpid()]
-	client, err := selectTerminalClient(processes, self.parent, os.Getenv("HERDR_THEME_CLIENT_PID"))
-	if err != nil {
-		return err
-	}
 	exe, err := os.Executable()
 	if err != nil {
 		return err
@@ -67,7 +68,7 @@ func emitToOuterTerminal(payload string) error {
 	defer cancel()
 	// Console ownership changes only in this short-lived process. The picker keeps
 	// its original handles for prompts, error reporting and the reload command.
-	cmd := exec.CommandContext(ctx, exe, "terminal-sync", strconv.Itoa(client.pid))
+	cmd := exec.CommandContext(ctx, exe, "terminal-sync", strconv.Itoa(os.Getppid()))
 	cmd.Stdin = strings.NewReader(payload)
 	cmd.SysProcAttr = &syscall.SysProcAttr{HideWindow: true, CreationFlags: windows.CREATE_NO_WINDOW}
 	output, err := cmd.CombinedOutput()
@@ -76,7 +77,7 @@ func emitToOuterTerminal(payload string) error {
 		if errors.As(err, &exit) && exit.ExitCode() == 3 {
 			return errNoOuterTerminal
 		}
-		return fmt.Errorf("sync client %d: %w: %s", client.pid, err, strings.TrimSpace(string(output)))
+		return fmt.Errorf("sync terminal: %w: %s", err, strings.TrimSpace(string(output)))
 	}
 	return nil
 }
@@ -86,10 +87,42 @@ func RunTerminalSyncHelper(pidText string) error {
 	if err != nil {
 		return err
 	}
-	client, err := selectTerminalClient(processes, 0, pidText)
-	if err != nil {
-		return err
+	var targetPID int
+	if explicit := os.Getenv("HERDR_THEME_CLIENT_PID"); explicit != "" {
+		if pid, err := strconv.Atoi(explicit); err == nil && pid > 0 {
+			if p, ok := processes[pid]; ok && isHerdrProcess(p.name) && canAttachConsole(pid) {
+				targetPID = pid
+			}
+		}
 	}
+	if targetPID == 0 {
+		parent, _ := strconv.Atoi(pidText)
+		seen := make(map[int]bool)
+		for parent > 0 && !seen[parent] {
+			seen[parent] = true
+			p, ok := processes[parent]
+			if !ok {
+				break
+			}
+			if isHerdrProcess(p.name) && canAttachConsole(p.pid) {
+				targetPID = p.pid
+				break
+			}
+			parent = p.parent
+		}
+	}
+	if targetPID == 0 {
+		for _, p := range processes {
+			if isHerdrProcess(p.name) && canAttachConsole(p.pid) {
+				targetPID = p.pid
+				break
+			}
+		}
+	}
+	if targetPID == 0 {
+		return errNoOuterTerminal
+	}
+
 	data, err := io.ReadAll(io.LimitReader(os.Stdin, maxPaletteBytes+1))
 	if err != nil {
 		return err
@@ -100,14 +133,14 @@ func RunTerminalSyncHelper(pidText string) error {
 	if ret, _, err := freeConsole.Call(); ret == 0 {
 		return fmt.Errorf("detach helper console: %w", err)
 	}
-	if ret, _, err := attachConsole.Call(uintptr(client.pid)); ret == 0 {
+	if ret, _, err := attachConsole.Call(uintptr(targetPID)); ret == 0 {
 		if errors.Is(err, windows.ERROR_INVALID_HANDLE) {
 			return errNoOuterTerminal
 		}
 		return fmt.Errorf("attach client console: %w", err)
 	}
 	defer freeConsole.Call()
-	f, err := os.OpenFile("CONOUT$", os.O_WRONLY, 0)
+	f, err := os.OpenFile("CONOUT$", os.O_RDWR, 0)
 	if err != nil {
 		return err
 	}
